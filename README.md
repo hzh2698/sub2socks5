@@ -1,64 +1,52 @@
 # sub2socks5
 
-一个基于 `Node.js + sing-box` 的本地代理管理器，用来把机场订阅、手动节点和节点组组织成可视化、可多端口分流的 `SOCKS5` 代理服务。
+一个基于 `Node.js + sing-box` 的本地代理管理器，用于把机场订阅、手动节点和节点组组织成可视化、可多端口分流的 `SOCKS5` 代理服务。
 
 ## 当前能力
 
-- 拉取订阅并解析常见节点协议
-- 支持订阅内容为：
-  - 单行节点链接
-  - 多行订阅文本
-  - Base64 / URL Safe Base64 订阅
-- 支持协议：
-  - `vmess`
-  - `vless`
-  - `trojan`
-  - `shadowsocks`
-  - `hysteria2`
-  - `tuic`
-- 支持多 `SOCKS5` 服务：
-  - 可在主页添加多个本地 `SOCKS5` 监听端口
-  - 每个端口可绑定不同节点或节点组
-- 支持节点管理：
-  - 订阅节点
-  - 手动节点
-  - 节点组
-- 支持手动节点导入：
+- 拉取并解析订阅节点
+- 支持 `vmess`、`vless`、`trojan`、`shadowsocks`、`hysteria2`、`tuic`
+- 支持 Base64、URL Safe Base64、多行订阅文本
+- 支持手动导入节点
   - 单行节点链接
   - 多行节点文本
   - 结构化 JSON
-- 支持节点组策略：
+  - 带 `raw` 字段的 JSON
+- 支持节点管理
+  - 订阅节点
+  - 手动节点
+  - 节点组
+  - 固定保留 `direct` 节点
+- 支持多个本地 `SOCKS5` 服务
+  - 每个端口可绑定不同节点或节点组
+- 支持节点组策略
   - `urltest`
-  - `fallback`（当前为应用层故障转移第一版）
-- 支持节点组自定义参数：
-  - 测试地址
-  - 测试间隔
-  - 超时毫秒
-- 支持内核管理：
+  - `fallback`（当前为应用层第一版）
+- 支持内核管理
   - 检测系统架构
-  - 获取版本列表
-  - 设置计划版本
+  - 获取 release 版本列表
+  - 设置计划下载版本
   - 拉取匹配架构的 `sing-box` 内核
-- 支持 DNS 防泄漏优化：
-  - 远程 DoH
-  - 引导 DNS
-  - 默认域名解析器优化
-- 支持运行状态与日志查看
+- 支持 DNS 防泄漏优化
+  - 远端 DoH
+  - Bootstrap DNS
+  - 默认域名解析器单独配置
+- 支持运行状态与实时日志查看
 
-## 当前项目结构
+## 项目结构
 
 - `D:\sub2socks5\src\server.js`
   - HTTP 服务入口
-  - 提供 Web UI 页面和后端 API
+  - 提供 Web UI 与后端 API
 - `D:\sub2socks5\src\lib\subscription.js`
   - 订阅拉取与节点解析
   - 手动节点原始输入解析
 - `D:\sub2socks5\src\lib\singbox-config.js`
-  - 业务配置转 `sing-box` 配置
+  - 业务配置转换为 `sing-box` 配置
 - `D:\sub2socks5\src\lib\singbox-manager.js`
   - `sing-box` 进程控制
 - `D:\sub2socks5\src\lib\singbox-release.js`
-  - `sing-box` Release 管理与下载
+  - release 获取、版本筛选、下载
 - `D:\sub2socks5\src\lib\storage.js`
   - 默认配置与持久化
 - `D:\sub2socks5\src\public\index.html`
@@ -68,105 +56,101 @@
 - `D:\sub2socks5\src\public\nodes.html`
   - 节点管理页
 - `D:\sub2socks5\src\public\nodes.js`
-  - 节点管理交互逻辑
+  - 节点管理逻辑
 - `D:\sub2socks5\src\public\style.css`
   - 页面样式
 
 ### 持久化目录
 
 - `D:\sub2socks5\data`
-  - 业务配置、订阅状态、架构信息、版本列表、计划内核信息
+  - 业务配置
+  - 订阅状态
+  - 架构信息
+  - 版本列表缓存
+  - 计划下载版本
 - `D:\sub2socks5\runtime`
   - 生成后的 `sing-box.json`
 - `D:\sub2socks5\bin`
-  - 已安装的 `sing-box` 内核和版本信息
+  - 已安装的 `sing-box` 内核
 
-## 运行流程
+## 工作流程
 
-1. 启动 Web UI：
+1. 启动 Web UI
    - `node src/server.js`
 2. 在主页保存基础配置
-3. 更新订阅或导入手动节点
-4. 生成 `sing-box` 配置
-5. 启动 `sing-box`
-6. 不同本地 `SOCKS5` 端口按配置走不同节点 / 节点组
+3. 更新订阅，或在节点管理页导入手动节点
+4. 配置节点组与多个本地 `SOCKS5` 服务
+5. 生成 `sing-box` 运行配置
+6. 启动 `sing-box`
+7. 不同本地端口分别通过不同节点或节点组提供代理服务
 
-## 当前 DNS 方案
+## DNS 策略
 
-默认使用：
+当前默认配置：
 
-- 远程 DoH：
-  - `https://cloudflare-dns.com/dns-query`
-- 引导 DNS：
-  - `223.5.5.5:53`
+- 远端 DoH：`https://cloudflare-dns.com/dns-query`
+- Bootstrap DNS：`223.5.5.5:53`
 
-当前思路：
+设计目标：
 
-- 远程 DoH 走代理出站
-- 默认域名解析优先由引导 DNS 协助完成
-- 避免直接依赖本地系统 DNS
+- 尽量减少本机直连 DNS 泄漏
+- 由远端 DoH 完成主要解析
+- 用 Bootstrap DNS 解析 DoH 域名，保证首跳稳定
 
 ## 节点组说明
 
 ### `urltest`
 
 - 使用 `sing-box` 原生 `urltest`
-- 会按测试地址定时探测节点
-- 选择延迟更优的节点
+- 定时对组内节点进行延迟测试
+- 自动选择更优节点转发流量
 
 ### `fallback`
 
 - 当前不是 `sing-box` 原生出站类型
-- 目前实现为“应用层故障转移第一版”
-- 后端会维护当前活跃节点
-- 后端会定时做健康检查
-- 当当前节点不可用时切换到下一个可用节点
-- 当前状态会显示在节点管理页
+- 目前实现为应用层故障转移第一版
+- 后端维护当前活跃节点
+- 周期性通过探测结果切换可用节点
+- 节点管理页可查看当前活跃成员和最近切换时间
 
-## Web UI 使用说明
+## Web UI 页面
 
-### 主页
+### 首页
 
-主页当前支持：
+支持：
 
-- 检测架构
+- 检测当前架构
 - 检查内核版本
 - 检查版本更新
 - 设置计划版本
 - 拉取 `sing-box` 内核
-- 保存配置
+- 保存基础配置
 - 更新订阅
 - 生成配置
 - 启动 / 停止 `sing-box`
-- 添加多个 `SOCKS5` 服务
-- 查看运行状态、生成结果、日志
+- 配置多个 `SOCKS5` 服务
+- 查看状态、生成结果和实时日志
 
 ### 节点管理页
 
-节点管理页当前支持：
+支持：
 
 - 导入手动节点
 - 查看 / 删除手动节点
 - 添加节点组
-- 为节点组设置：
-  - 策略
-  - 测试地址
-  - 测试间隔
-  - 超时毫秒
-- 为节点组按行添加成员
-- 查看 `fallback` 当前活跃节点和最近切换时间
+- 为节点组设置策略与测试参数
+- 按行添加节点组成员
+- 查看 `fallback` 当前活跃节点状态
 
-## 手动节点导入说明
+## 手动导入节点格式
 
-手动节点导入框支持以下格式：
-
-### 1. 单行节点链接
+### 单行节点链接
 
 ```text
 vless://uuid@example.com:443?security=tls&sni=example.com#my-node
 ```
 
-### 2. 多行节点文本
+### 多行节点文本
 
 ```text
 vless://...
@@ -174,7 +158,7 @@ trojan://...
 ss://...
 ```
 
-### 3. 结构化 JSON
+### 结构化 JSON
 
 ```json
 {
@@ -186,7 +170,7 @@ ss://...
 }
 ```
 
-### 4. 带 `raw` 的结构化 JSON
+### 带 `raw` 的 JSON
 
 ```json
 {
@@ -196,33 +180,27 @@ ss://...
 
 处理逻辑：
 
-1. 后端先判断是否为 JSON
+1. 先判断输入是否为 JSON
 2. 如果是 JSON，优先按结构化节点处理
-3. 如果不是 JSON，按订阅 / 链接文本解析
-4. 先识别协议，再按对应协议模板匹配
+3. 如果不是 JSON，则按订阅 / 链接文本解析
+4. 先识别协议，再套用对应协议模板解析
 
 ## API 列表
 
 ### 配置相关
 
 - `GET /api/config`
-  - 获取当前完整配置、订阅状态、可用出口、内核状态等
 - `POST /api/config`
-  - 保存业务配置
 
 ### 订阅相关
 
 - `POST /api/subscription/refresh`
-  - 拉取并解析订阅
 
 ### 节点相关
 
 - `GET /api/nodes`
-  - 获取订阅节点、手动节点、节点组、可用出口、`fallback` 状态
 - `POST /api/nodes`
-  - 保存手动节点和节点组
 - `POST /api/nodes/import`
-  - 导入原始节点输入并解析为节点
 
 ### 内核相关
 
@@ -242,9 +220,9 @@ ss://...
 - `GET /api/runtime/generated`
 - `GET /api/runtime/logs`
 
-## API 测试方法
+## API 调用与测试方法
 
-下面是当前阶段推荐的 Windows / PowerShell 测试方法。
+以下示例以 Windows PowerShell 为准。
 
 ### 1. 启动服务
 
@@ -258,19 +236,19 @@ node src/server.js
 http://127.0.0.1:18080
 ```
 
-### 2. 测试基础配置接口
+### 2. 获取当前配置
 
 ```powershell
 Invoke-RestMethod -Uri "http://127.0.0.1:18080/api/config"
 ```
 
-### 3. 测试节点列表接口
+### 3. 获取节点列表
 
 ```powershell
 Invoke-RestMethod -Uri "http://127.0.0.1:18080/api/nodes"
 ```
 
-### 4. 测试手动节点导入接口
+### 4. 手动导入节点
 
 ```powershell
 $body = @{
@@ -284,7 +262,17 @@ Invoke-RestMethod `
   -Body $body
 ```
 
-### 5. 测试生成配置
+### 5. 更新订阅
+
+```powershell
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:18080/api/subscription/refresh" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body "{}"
+```
+
+### 6. 生成运行配置
 
 ```powershell
 Invoke-RestMethod `
@@ -294,7 +282,7 @@ Invoke-RestMethod `
   -Body "{}"
 ```
 
-### 6. 测试启动 `sing-box`
+### 7. 启动 `sing-box`
 
 ```powershell
 Invoke-RestMethod `
@@ -304,21 +292,21 @@ Invoke-RestMethod `
   -Body "{}"
 ```
 
-### 7. 测试运行日志
+### 8. 查看运行日志
 
 ```powershell
 Invoke-RestMethod -Uri "http://127.0.0.1:18080/api/runtime/logs"
 ```
 
-### 8. 测试 SOCKS5 端口监听
+### 9. 测试本地 `SOCKS5` 端口是否监听
 
-假设当前监听端口为 `53456`：
+假设当前端口为 `53456`：
 
 ```powershell
 Test-NetConnection -ComputerName 127.0.0.1 -Port 53456
 ```
 
-### 9. 测试 SOCKS5 代理访问 Google
+### 10. 测试是否能通过代理访问 Google
 
 ```powershell
 curl.exe --socks5-hostname 127.0.0.1:53456 --max-time 25 https://www.google.com/generate_204 -I -s -o NUL -w "%{http_code}"
@@ -330,7 +318,7 @@ curl.exe --socks5-hostname 127.0.0.1:53456 --max-time 25 https://www.google.com/
 204
 ```
 
-### 10. 测试 SOCKS5 代理访问 Gstatic
+### 11. 测试是否能通过代理访问 Gstatic
 
 ```powershell
 curl.exe --socks5-hostname 127.0.0.1:53456 --max-time 25 https://www.gstatic.com/generate_204 -I -s -o NUL -w "%{http_code}"
@@ -342,24 +330,24 @@ curl.exe --socks5-hostname 127.0.0.1:53456 --max-time 25 https://www.gstatic.com
 204
 ```
 
-## 当前已验证结论
+## 当前已验证结果
 
-- Web UI 可以正常启动
+- Web UI 可正常启动在 `18080`
 - `GET /api/config` 正常返回
 - `GET /api/nodes` 正常返回
-- `POST /api/nodes/import` 已实际验证可成功导入 `vless://...` 节点
-- `SOCKS5` 端口已真实验证可监听
-- 通过代理访问 Google / Gstatic 已真实验证返回 `204`
+- `POST /api/nodes/import` 已验证可成功导入 `vless://...`
+- `SOCKS5` 端口已验证可监听
+- 已验证可通过代理访问 Google / Gstatic 并返回 `204`
 
 ## 注意事项
 
-- `fallback` 当前仍是第一版实现，后续还可以继续增强健康检查和回切逻辑
-- 某些机场私有字段可能仍需继续兼容
-- 运行期文件和本地订阅状态不建议提交到 Git
+- `fallback` 目前仍是第一版应用层实现
+- 某些机场私有字段仍可能需要继续兼容
+- 不建议把运行期文件和本地状态文件提交到 Git
 
 ## 后续建议
 
 - 给手动导入增加导入预览
-- 给结构化 JSON 增加协议默认字段补全
-- 继续完善 Mihomo 风格 `fallback`
-- 为 `fallback` 增加健康检查结果展示
+- 给结构化 JSON 输入补全更多协议默认字段
+- 继续增强 Mihomo 风格 `fallback`
+- 为节点健康检查增加更直观的 UI 展示
