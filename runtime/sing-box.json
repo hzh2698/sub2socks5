@@ -1,0 +1,1033 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "dns-remote",
+        "detour": "proxy",
+        "type": "tls",
+        "server": "1.1.1.1"
+      },
+      {
+        "tag": "dns-direct",
+        "type": "local"
+      }
+    ],
+    "rules": [
+      {
+        "clash_mode": "Direct",
+        "server": "dns-direct"
+      }
+    ],
+    "final": "dns-remote",
+    "strategy": "prefer_ipv4",
+    "independent_cache": true,
+    "disable_cache": false,
+    "disable_expire": false
+  },
+  "inbounds": [
+    {
+      "type": "socks",
+      "tag": "default-socks",
+      "listen": "127.0.0.1",
+      "listen_port": 53456
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    },
+    {
+      "type": "vless",
+      "tag": "HK-1",
+      "server": "hk1-r.link-t7.com",
+      "server_port": 10126,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "s0.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "HK-2",
+      "server": "hk2-r.link-t7.com",
+      "server_port": 10127,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "s0.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "HK-3",
+      "server": "hk3-r.link-t7.com",
+      "server_port": 10128,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "s0.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "movie"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "HK-4",
+      "server": "hk4-r.link-t7.com",
+      "server_port": 10129,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "s0.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "movie"
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "HK2-HY2",
+      "server": "hk2.dexlos.com",
+      "server_port": 20368,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "hk2.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "HK3-HY2",
+      "server": "hk3.dexlos.com",
+      "server_port": 20413,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "hk3.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "HK4-HY2",
+      "server": "hk4.dexlos.com",
+      "server_port": 20697,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "hk4.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "HK5-HY2",
+      "server": "hk5.dexlos.com",
+      "server_port": 20818,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "hk5.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "JP-1",
+      "server": "jp1-r.link-t7.com",
+      "server_port": 10031,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "s0.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "JP-2",
+      "server": "jp2-r.link-t7.com",
+      "server_port": 10032,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "s0.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "JP-3",
+      "server": "jp3-r.link-t7.com",
+      "server_port": 10033,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "s0.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "JP-4",
+      "server": "jp4-r.link-t7.com",
+      "server_port": 10034,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "s0.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "JP6-HY2",
+      "server": "jp6.dexlos.com",
+      "server_port": 21170,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "jp6.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "JP7-HY2",
+      "server": "jp7.dexlos.com",
+      "server_port": 21310,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "jp7.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "JP8-HY2",
+      "server": "jp8.dexlos.com",
+      "server_port": 21499,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "jp8.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "KR-1",
+      "server": "kr1-r.link-t7.com",
+      "server_port": 10046,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "s0.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "KR-2",
+      "server": "kr2-r.link-t7.com",
+      "server_port": 10047,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "s0.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "SG-1",
+      "server": "sg1-r.link-t7.com",
+      "server_port": 10036,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "s0.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "SG-2",
+      "server": "sg2-r.link-t7.com",
+      "server_port": 10037,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "s0.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "SG-3",
+      "server": "sg3-r.link-t7.com",
+      "server_port": 10038,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "d1.awsstatic.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "wOu-BMrXvk9KX23JZrlpUlF4SMjDcejm0vNECdhy5xE",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "SG1-HY2",
+      "server": "sg1.dexlos.com",
+      "server_port": 20189,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "sg1.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "SG2-HY2",
+      "server": "sg2.dexlos.com",
+      "server_port": 20321,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "sg2.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "TW-1",
+      "server": "tw1.dexlos.com",
+      "server_port": 8080,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "server_name": "tw1.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "TW-2",
+      "server": "tw2.dexlos.com",
+      "server_port": 8080,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "server_name": "tw2.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "TW-3",
+      "server": "tw3.dexlos.com",
+      "server_port": 8080,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "server_name": "tw3.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "TW-4",
+      "server": "tw4.dexlos.com",
+      "server_port": 8080,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "server_name": "tw4.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "TW-5",
+      "server": "tw5.dexlos.com",
+      "server_port": 8080,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "server_name": "tw5.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "TW-6",
+      "server": "tw6.dexlos.com",
+      "server_port": 8080,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "server_name": "tw6.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "TW-7",
+      "server": "tw7.dexlos.com",
+      "server_port": 8080,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "server_name": "tw7.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "TW-8",
+      "server": "tw8.dexlos.com",
+      "server_port": 8080,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "server_name": "tw8.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "TW-9",
+      "server": "tw9.dexlos.com",
+      "server_port": 8080,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "server_name": "tw9.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "TW-10",
+      "server": "tw10.dexlos.com",
+      "server_port": 8080,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "server_name": "tw10.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "US-1",
+      "server": "155.117.87.197",
+      "server_port": 10041,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.microsoft.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "4ubRpOGo1d0kaRjvob_x0t271IL1P6al2gM5slqf_Fc",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "US-2",
+      "server": "18.224.18.31",
+      "server_port": 10042,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.microsoft.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "4ubRpOGo1d0kaRjvob_x0t271IL1P6al2gM5slqf_Fc",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "US-3-gemini",
+      "server": "us3-r.link-t7.com",
+      "server_port": 10043,
+      "uuid": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.microsoft.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "4ubRpOGo1d0kaRjvob_x0t271IL1P6al2gM5slqf_Fc",
+          "short_id": "686c0ef0"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "update"
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "US-gemini-1",
+      "server": "us9.dexlos.com",
+      "server_port": 21704,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "us9.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "US1-HY2",
+      "server": "us1.dexlos.com",
+      "server_port": 20074,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "us1.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "US2-HY2",
+      "server": "us2.dexlos.com",
+      "server_port": 20294,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "us2.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "US3-HY2",
+      "server": "us3.dexlos.com",
+      "server_port": 20581,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "us3.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "US4-HY2",
+      "server": "us4.dexlos.com",
+      "server_port": 20657,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "us4.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "US5-HY2",
+      "server": "us5.dexlos.com",
+      "server_port": 20815,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "us5.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "US6-HY2",
+      "server": "us6.dexlos.com",
+      "server_port": 21178,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "us6.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "US7-HY2",
+      "server": "us7.dexlos.com",
+      "server_port": 21334,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "us7.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "US8-HY2",
+      "server": "us8.dexlos.com",
+      "server_port": 21584,
+      "password": "3A8BA90C-8F4D-4DC7-877E-56F4F96F448A",
+      "tls": {
+        "enabled": true,
+        "server_name": "us8.dexlos.com",
+        "insecure": false,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "selector",
+      "tag": "proxy",
+      "outbounds": [
+        "HK-1",
+        "HK-2",
+        "HK-3",
+        "HK-4",
+        "HK2-HY2",
+        "HK3-HY2",
+        "HK4-HY2",
+        "HK5-HY2",
+        "JP-1",
+        "JP-2",
+        "JP-3",
+        "JP-4",
+        "JP6-HY2",
+        "JP7-HY2",
+        "JP8-HY2",
+        "KR-1",
+        "KR-2",
+        "SG-1",
+        "SG-2",
+        "SG-3",
+        "SG1-HY2",
+        "SG2-HY2",
+        "TW-1",
+        "TW-2",
+        "TW-3",
+        "TW-4",
+        "TW-5",
+        "TW-6",
+        "TW-7",
+        "TW-8",
+        "TW-9",
+        "TW-10",
+        "US-1",
+        "US-2",
+        "US-3-gemini",
+        "US-gemini-1",
+        "US1-HY2",
+        "US2-HY2",
+        "US3-HY2",
+        "US4-HY2",
+        "US5-HY2",
+        "US6-HY2",
+        "US7-HY2",
+        "US8-HY2"
+      ],
+      "default": "HK-1"
+    },
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": [
+        "HK-1",
+        "HK-2",
+        "HK-3",
+        "HK-4",
+        "HK2-HY2",
+        "HK3-HY2",
+        "HK4-HY2",
+        "HK5-HY2",
+        "JP-1",
+        "JP-2",
+        "JP-3",
+        "JP-4",
+        "JP6-HY2",
+        "JP7-HY2",
+        "JP8-HY2",
+        "KR-1",
+        "KR-2",
+        "SG-1",
+        "SG-2",
+        "SG-3",
+        "SG1-HY2",
+        "SG2-HY2",
+        "TW-1",
+        "TW-2",
+        "TW-3",
+        "TW-4",
+        "TW-5",
+        "TW-6",
+        "TW-7",
+        "TW-8",
+        "TW-9",
+        "TW-10",
+        "US-1",
+        "US-2",
+        "US-3-gemini",
+        "US-gemini-1",
+        "US1-HY2",
+        "US2-HY2",
+        "US3-HY2",
+        "US4-HY2",
+        "US5-HY2",
+        "US6-HY2",
+        "US7-HY2",
+        "US8-HY2"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "10m",
+      "tolerance": 50
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "final": "proxy",
+    "default_domain_resolver": {
+      "server": "dns-remote",
+      "strategy": "prefer_ipv4"
+    },
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "inbound": "default-socks",
+        "action": "sniff"
+      },
+      {
+        "inbound": "default-socks",
+        "action": "resolve",
+        "strategy": "prefer_ipv4"
+      },
+      {
+        "inbound": "default-socks",
+        "outbound": "proxy"
+      }
+    ],
+    "rule_set": []
+  },
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "path": "cache.db",
+      "store_rdrc": true,
+      "store_fakeip": true
+    },
+    "clash_api": {
+      "external_controller": "127.0.0.1:19090",
+      "external_ui": "",
+      "secret": ""
+    }
+  }
+}

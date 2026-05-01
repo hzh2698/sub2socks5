@@ -1,0 +1,263 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>sub2socks5</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>sub2socks5</h1>
+    <p>订阅转多端口 socks5 管理面板</p>
+
+    <section>
+      <div id="status-bar" class="status-bar is-idle">准备就绪</div>
+      <div class="actions actions-top">
+        <button id="kernel-architecture-detect">检测当前架构</button>
+        <button id="kernel-check">检查内核版本</button>
+        <button id="kernel-check-updates">检查版本更新</button>
+      </div>
+      <div class="kernel-control-row">
+        <div class="kernel-pickers">
+          <select id="kernel-arch-select">
+            <option value="windows-amd64">windows-amd64</option>
+            <option value="windows-arm64">windows-arm64</option>
+            <option value="linux-amd64">linux-amd64</option>
+            <option value="linux-arm64">linux-arm64</option>
+            <option value="darwin-amd64">darwin-amd64</option>
+            <option value="darwin-arm64">darwin-arm64</option>
+          </select>
+          <select id="kernel-version-select"></select>
+        </div>
+        <div class="actions actions-inline">
+          <button id="kernel-select-version">设为计划版本</button>
+          <button id="kernel-download">拉取 sing-box 内核</button>
+        </div>
+      </div>
+      <div class="actions actions-runtime">
+        <button id="start">启动 sing-box</button>
+        <button id="stop">停止 sing-box</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="tab-bar">
+        <button class="tab-button is-active" data-tab="overview" type="button">概览</button>
+        <button class="tab-button" data-tab="logs" type="button">实时日志</button>
+      </div>
+
+      <div id="tab-overview" class="tab-panel is-active">
+        <div class="info-grid">
+          <section class="embedded-section">
+            <div class="section-heading">
+              <h2>架构信息</h2>
+              <div class="view-switch">
+                <button id="switch-architecture-form" class="switch-button is-active" type="button">表单模式</button>
+                <button id="switch-architecture-json" class="switch-button" type="button">JSON 模式</button>
+              </div>
+            </div>
+            <div id="architecture-form-view" class="info-view">
+              <div id="architecture-form" class="kv-grid"></div>
+            </div>
+            <div id="architecture-json-view" class="info-view is-hidden">
+              <pre id="architecture"></pre>
+            </div>
+          </section>
+
+          <section class="embedded-section">
+            <div class="section-heading">
+              <h2>内核状态</h2>
+              <div class="view-switch">
+                <button id="switch-kernel-form" class="switch-button is-active" type="button">表单模式</button>
+                <button id="switch-kernel-json" class="switch-button" type="button">JSON 模式</button>
+              </div>
+            </div>
+            <div id="kernel-form-view" class="info-view">
+              <div id="kernel-form" class="kv-grid"></div>
+            </div>
+            <div id="kernel-json-view" class="info-view is-hidden">
+              <pre id="kernel"></pre>
+            </div>
+          </section>
+        </div>
+
+        <section class="embedded-section">
+          <div class="section-heading">
+            <h2>基础配置</h2>
+            <div class="section-heading-actions">
+              <button id="save-config" type="button">保存配置</button>
+              <button id="generate" type="button">生成 sing-box 配置</button>
+              <div id="editor-status" class="editor-status is-saved">配置已保存</div>
+              <div class="view-switch">
+                <button id="switch-form" class="switch-button is-active" type="button">表单模式</button>
+                <button id="switch-json" class="switch-button" type="button">JSON 模式</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="form-view" class="config-view">
+            <div class="form-grid">
+              <label class="field-with-action">
+                <span>订阅地址</span>
+                <div class="inline-field">
+                  <input id="field-subscription-url" type="text" />
+                  <button id="refresh-sub" type="button">更新订阅</button>
+                </div>
+              </label>
+              <label>
+                <span>订阅格式</span>
+                <select id="field-subscription-format">
+                  <option value="raw">raw</option>
+                </select>
+              </label>
+              <label>
+                <span>Web UI 监听地址</span>
+                <input id="field-app-host" type="text" />
+              </label>
+              <label>
+                <span>Web UI 端口</span>
+                <input id="field-app-port" type="number" min="1" step="1" />
+              </label>
+              <label>
+                <span>sing-box 二进制路径</span>
+                <input id="field-app-binary" type="text" />
+              </label>
+              <label>
+                <span>日志级别</span>
+                <select id="field-app-log-level">
+                  <option value="trace">trace</option>
+                  <option value="debug">debug</option>
+                  <option value="info">info</option>
+                  <option value="warn">warn</option>
+                  <option value="error">error</option>
+                  <option value="fatal">fatal</option>
+                  <option value="panic">panic</option>
+                </select>
+              </label>
+              <label>
+                <span>自动启动</span>
+                <input id="field-app-auto-start" type="checkbox" />
+              </label>
+              <label>
+                <span>DNS 策略</span>
+                <select id="field-dns-strategy">
+                  <option value="prefer_ipv4">prefer_ipv4</option>
+                  <option value="prefer_ipv6">prefer_ipv6</option>
+                  <option value="ipv4_only">ipv4_only</option>
+                  <option value="ipv6_only">ipv6_only</option>
+                </select>
+              </label>
+              <label>
+                <span>代理 DNS (DoH)</span>
+                <input id="field-dns-remote-url" type="text" placeholder="https://1.1.1.1/dns-query" />
+              </label>
+              <label>
+                <span>DoH 引导解析 DNS</span>
+                <input id="field-dns-bootstrap" type="text" placeholder="223.5.5.5" />
+              </label>
+              <label>
+                <span>默认路由出口</span>
+                <select id="field-route-final"></select>
+              </label>
+              <label>
+                <span>SOCKS 监听地址</span>
+                <input id="field-port-listen" type="text" />
+              </label>
+              <label>
+                <span>SOCKS 端口</span>
+                <input id="field-port-number" type="number" min="1" step="1" />
+              </label>
+              <label>
+                <span>SOCKS 目标出口</span>
+                <select id="field-port-target"></select>
+              </label>
+              <label>
+                <span>启用 sniff</span>
+                <input id="field-port-sniff" type="checkbox" />
+              </label>
+            </div>
+            <p class="form-note">表单模式当前覆盖高频字段；复杂规则、DNS 服务器和多端口高级配置请切换到 JSON 模式。</p>
+          </div>
+
+          <div id="json-view" class="config-view is-hidden">
+            <textarea id="config-editor" spellcheck="false"></textarea>
+          </div>
+        </section>
+
+        <div class="info-grid">
+          <section class="embedded-section">
+            <div class="section-heading">
+              <h2>订阅节点</h2>
+              <div class="view-switch">
+                <button id="switch-subscription-form" class="switch-button is-active" type="button">表单模式</button>
+                <button id="switch-subscription-json" class="switch-button" type="button">JSON 模式</button>
+              </div>
+            </div>
+            <div id="subscription-form-view" class="info-view">
+              <div class="section-heading-actions">
+                <button id="manage-nodes" type="button">节点管理</button>
+              </div>
+              <div id="subscription-form" class="kv-grid"></div>
+            </div>
+            <div id="subscription-json-view" class="info-view is-hidden">
+              <pre id="nodes"></pre>
+            </div>
+          </section>
+
+          <section class="embedded-section">
+            <div class="section-heading">
+              <h2>运行状态</h2>
+              <div class="view-switch">
+                <button id="switch-runtime-form" class="switch-button is-active" type="button">表单模式</button>
+                <button id="switch-runtime-json" class="switch-button" type="button">JSON 模式</button>
+              </div>
+            </div>
+            <div id="runtime-form-view" class="info-view">
+              <div id="runtime-form" class="kv-grid"></div>
+            </div>
+            <div id="runtime-json-view" class="info-view is-hidden">
+              <pre id="runtime"></pre>
+            </div>
+          </section>
+        </div>
+
+        <section class="embedded-section">
+          <div class="section-heading">
+            <h2>生成结果</h2>
+            <div class="view-switch">
+              <button id="switch-generated-form" class="switch-button is-active" type="button">表单模式</button>
+              <button id="switch-generated-json" class="switch-button" type="button">JSON 模式</button>
+            </div>
+          </div>
+          <div id="generated-form-view" class="info-view">
+            <div id="generated-form" class="kv-grid"></div>
+          </div>
+          <div id="generated-json-view" class="info-view is-hidden">
+            <pre id="generated"></pre>
+          </div>
+        </section>
+      </div>
+
+      <div id="tab-logs" class="tab-panel is-hidden">
+        <section class="embedded-section">
+          <div class="section-heading">
+            <h2>实时日志</h2>
+            <div class="view-switch">
+              <button id="switch-logs-form" class="switch-button is-active" type="button">表单模式</button>
+              <button id="switch-logs-json" class="switch-button" type="button">JSON 模式</button>
+            </div>
+          </div>
+          <div id="logs-form-view" class="info-view">
+            <div id="logs-form" class="timeline"></div>
+          </div>
+          <div id="logs-json-view" class="info-view is-hidden">
+            <pre id="logs"></pre>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

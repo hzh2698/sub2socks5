@@ -1,0 +1,16 @@
+{
+  "version": "v1.13.11",
+  "publishedAt": "2026-04-23T00:44:08Z",
+  "assetName": "sing-box-1.13.11-windows-amd64.zip",
+  "downloadUrl": "https://github.com/SagerNet/sing-box/releases/download/v1.13.11/sing-box-1.13.11-windows-amd64.zip",
+  "size": 20400572,
+  "platform": {
+    "detectedAt": "2026-05-01T02:28:19.655Z",
+    "platform": "win32",
+    "arch": "x64",
+    "os": "windows",
+    "archName": "amd64",
+    "assetSuffix": "windows-amd64",
+    "executableName": "sing-box.exe"
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "app": {
+    "host": "127.0.0.1",
+    "port": 18080,
+    "singBoxBinary": "D:\\sub2socks5\\bin\\sing-box.exe",
+    "autoStart": false,
+    "logLevel": "info"
+  },
+  "subscription": {
+    "url": "https://app.mitce.net/?sid=90177&token=74169fd33b7e037cc568",
+    "format": "raw",
+    "userAgent": "sub2socks5/0.1.0",
+    "refreshIntervalMinutes": 60,
+    "headers": {}
+  },
+  "dns": {
+    "strategy": "prefer_ipv4",
+    "servers": [
+      {
+        "tag": "dns-remote",
+        "detour": "proxy",
+        "type": "tls",
+        "server": "1.1.1.1"
+      },
+      {
+        "tag": "dns-direct",
+        "type": "local"
+      }
+    ],
+    "rules": [
+      {
+        "clash_mode": "Direct",
+        "server": "dns-direct"
+      }
+    ],
+    "final": "dns-remote",
+    "independentCache": true,
+    "disableCache": false,
+    "disableExpire": false
+  },
+  "routing": {
+    "routeFinal": "proxy",
+    "autoDetectInterface": true,
+    "ruleSetUrls": [],
+    "rules": [
+      {
+        "action": "sniff"
+      }
+    ]
+  },
+  "ports": [
+    {
+      "tag": "default-socks",
+      "listen": "127.0.0.1",
+      "port": 53456,
+      "target": "proxy",
+      "sniff": true
+    }
+  ]
+}

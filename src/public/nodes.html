@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>节点管理 - sub2socks5</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="container">
+    <section>
+      <div class="section-heading">
+        <h1>节点管理</h1>
+        <div class="section-heading-actions">
+          <button id="back-home" type="button">返回主页</button>
+          <button id="save-nodes" type="button">保存节点配置</button>
+        </div>
+      </div>
+      <div id="node-status" class="status-bar is-idle">准备就绪</div>
+    </section>
+
+    <section>
+      <div class="section-heading">
+        <h2>手动节点</h2>
+        <button id="add-manual-node" type="button">添加手动节点</button>
+      </div>
+      <div id="manual-nodes" class="timeline"></div>
+    </section>
+
+    <section>
+      <div class="section-heading">
+        <h2>节点组</h2>
+        <button id="add-group" type="button">添加节点组</button>
+      </div>
+      <div id="groups" class="timeline"></div>
+    </section>
+
+    <section>
+      <div class="section-heading">
+        <h2>现有节点</h2>
+      </div>
+      <pre id="available-node-list"></pre>
+    </section>
+  </main>
+  <script type="module" src="/nodes.js"></script>
+</body>
+</html>
