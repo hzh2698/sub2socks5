@@ -1,9 +1,15 @@
-﻿{
+{
   "name": "sub2socks5",
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": "src/server.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "build:sea": "node scripts/build-sea.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.11",
+    "postject": "^1.0.0-alpha.6"
   }
 }

@@ -1,4 +1,4 @@
-# sub2socks5
+﻿# sub2socks5
 
 一个基于 `Node.js + sing-box` 的本地代理管理器，用于把机场订阅、手动节点和节点组组织成可视化、可多端口分流的 `SOCKS5` 代理服务。
 
@@ -394,3 +394,66 @@ curl.exe --socks5-hostname 127.0.0.1:53456 --max-time 25 https://www.gstatic.com
 - 某些机场私有字段仍可能需要继续兼容
 - 当前“运行中应用新配置”采用重启 `sing-box` 的方式，而不是热重载
 - 不建议把运行期文件和本地状态文件提交到 Git
+
+## 打包方法
+
+当前项目支持使用 Node.js SEA（Single Executable Applications）打包为 Windows 单文件可执行程序。
+
+### 前置要求
+
+- 已安装 Node.js 24.x
+- 在项目根目录执行命令
+
+### 安装依赖
+
+```powershell
+npm install
+```
+
+### 构建 SEA 可执行文件
+
+```powershell
+npm run build:sea
+```
+
+### 输出文件
+
+构建完成后会生成：
+
+- `D:\sub2socks5\dist\sub2socks5-sea.exe`
+
+### 运行方式
+
+```powershell
+cd D:\sub2socks5\dist
+.\sub2socks5-sea.exe
+```
+
+默认 Web UI 地址：
+
+```text
+http://127.0.0.1:18080
+```
+
+### 首次运行行为
+
+- 如果不存在配置文件，程序会自动生成默认配置
+- 程序会在可执行文件同级目录下自动创建运行目录
+- 默认会创建或使用以下目录：
+  - `data`
+  - `runtime`
+  - `bin`
+
+### 打包说明
+
+- 当前 SEA 包只嵌入业务代码和 `src/public` 下的静态资源
+- `sing-box` 内核不会嵌入到 exe 中
+- 首次运行后，用户可以通过 Web UI 按系统架构下载对应的 `sing-box` 内核
+- 因此发布时通常只需要提供：
+  - `sub2socks5-sea.exe`
+  - 或者由用户首次运行后自行下载内核
+
+### 注意事项
+
+- SEA 注入后可能出现 `signature seems corrupted` 提示，这是 Node 可执行文件注入应用 blob 后的常见现象
+- 这不代表构建失败；如果要正式分发，建议重新进行代码签名

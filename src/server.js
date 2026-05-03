@@ -33,26 +33,14 @@ import {
 } from './lib/singbox-release.js';
 
 const manager = new SingBoxManager();
-let appConfig = await loadConfig();
-let subscriptionState = (await loadSubscriptionState()) || {
-  raw: '',
-  nodes: [],
-  warnings: [],
-  updatedAt: null
-};
-let kernelState = await readInstalledKernelInfo();
-let architectureState = (await loadArchitectureInfo()) || null;
-let plannedKernelInfo = await loadPlannedKernelInfo();
-let releaseListState = (await loadReleaseListInfo()) || [];
-let downloadState = {
-  active: false,
-  steps: [],
-  progress: null,
-  updatedAt: null
-};
+let appConfig;
+let subscriptionState;
+let kernelState;
+let architectureState;
+let plannedKernelInfo;
+let releaseListState;
+let downloadState;
 let fallbackTimer = null;
-
-await initializePresetState();
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -367,20 +355,51 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(appConfig.app.port, appConfig.app.host, async () => {
-  console.log(`Web UI listening on http://${appConfig.app.host}:${appConfig.app.port}`);
-  if (appConfig.app.autoStart) {
-    try {
-      subscriptionState = await refreshSubscription();
-      const generated = buildSingBoxConfig(appConfig, subscriptionState);
-      await writeGeneratedConfig(generated);
-      await manager.start(resolveManagedPath(appConfig.app.singBoxBinary), generatedConfigPath);
-      restartFallbackLoop();
-    } catch (error) {
-      manager.pushLog(`Auto start failed: ${error.message}`);
+export async function startServer() {
+  appConfig = await loadConfig();
+  subscriptionState = (await loadSubscriptionState()) || {
+    raw: '',
+    nodes: [],
+    warnings: [],
+    updatedAt: null
+  };
+  kernelState = await readInstalledKernelInfo();
+  architectureState = (await loadArchitectureInfo()) || null;
+  plannedKernelInfo = await loadPlannedKernelInfo();
+  releaseListState = (await loadReleaseListInfo()) || [];
+  downloadState = {
+    active: false,
+    steps: [],
+    progress: null,
+    updatedAt: null
+  };
+
+  await initializePresetState();
+
+  server.listen(appConfig.app.port, appConfig.app.host, async () => {
+    console.log(`Web UI listening on http://${appConfig.app.host}:${appConfig.app.port}`);
+    if (appConfig.app.autoStart) {
+      try {
+        subscriptionState = await refreshSubscription();
+        const generated = buildSingBoxConfig(appConfig, subscriptionState);
+        await writeGeneratedConfig(generated);
+        await manager.start(resolveManagedPath(appConfig.app.singBoxBinary), generatedConfigPath);
+        restartFallbackLoop();
+      } catch (error) {
+        manager.pushLog(`Auto start failed: ${error.message}`);
+      }
     }
-  }
-});
+  });
+
+  return server;
+}
+
+if (process.env.SUB2SOCKS5_SEA_BOOTSTRAP !== '1') {
+  startServer().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
 
 async function initializePresetState() {
   const runtimeExists = await pathExists(generatedConfigPath);
@@ -724,6 +743,19 @@ function pushDownloadStep(entry) {
 async function serveStatic(pathname, method, res) {
   const requestedPath = pathname === '/' ? '/index.html' : pathname;
   const relativePath = requestedPath.replace(/^\/+/, '');
+  const embeddedAssets = globalThis.__SUB2SOCKS5_SEA_ASSETS__ || null;
+
+  if (embeddedAssets && embeddedAssets[relativePath]) {
+    const content = Buffer.from(embeddedAssets[relativePath], 'base64');
+    res.writeHead(200, baseHeaders(contentType(relativePath)));
+    if (method === 'HEAD') {
+      res.end();
+      return;
+    }
+    res.end(content);
+    return;
+  }
+
   const filePath = path.resolve(publicDir, relativePath);
   const relativeCheck = path.relative(publicDir, filePath);
 

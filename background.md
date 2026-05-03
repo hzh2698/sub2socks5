@@ -1,138 +1,387 @@
 # sing-box Background
 
-本文档记录当前阶段项目使用到的技术、参考材料、实现思路、策略选择与测试经验，方便后续继续迭代。
+本文件用于记录当前阶段项目实际使用到的技术、参考材料、配置思路、实现映射和测试结论，方便后续继续开发时快速接手。
 
-## 1. 当前技术栈
+---
 
-### 后端
+## 1. 当前使用到的技术
+
+### 1.1 后端技术
 
 - `Node.js 24+`
+  - 作为项目主运行时
+  - 用于提供本地 HTTP 服务、配置管理、订阅拉取、内核管理和进程控制
+
 - Node.js 内置模块
   - `http`
+    - 提供 Web UI 和 API
   - `fs/promises`
+    - 读写配置、运行时文件、版本信息、订阅状态
   - `path`
+    - 管理跨目录路径
   - `url`
-  - `buffer`
+    - 处理模块路径、URL 解析
   - `child_process`
+    - 启动 `sing-box`
+  - `buffer`
+    - 处理订阅 Base64、`vmess` / `ss` 等内容解析
 
-### 前端
+### 1.2 前端技术
 
 - 原生 HTML / CSS / JavaScript
-- `fetch`
-- 简单轮询刷新
-- 表单模式与 JSON 模式切换
-- 动态表单增删
-- 预设下拉与自定义输入显隐
+  - 当前没有引入前端框架
+  - 使用静态页面 + 原生 DOM 事件实现 Web UI
 
-### 代理内核
+- 前端交互方式
+  - `fetch` 调用后端 API
+  - `localStorage`
+    - 用于节点管理页和主页之间的联动通知
+  - 轮询刷新
+    - 用于主页状态、运行日志、下载状态同步
+
+### 1.3 代理内核技术
 
 - `sing-box`
+  - 作为核心代理引擎
+  - 负责：
+    - 启动 `SOCKS5` 入站
+    - 节点连接
+    - 出站转发
+    - DNS 解析
+    - 规则路由
 
-### 测试环境
+### 1.4 配置与运行相关技术
 
-- Windows 11
+- JSON 配置持久化
+  - 项目业务配置保存在 `data\app-config.json`
+  - 订阅状态保存在 `data\subscription-state.json`
+  - 运行配置保存在 `runtime\sing-box.json`
+
+- GitHub Releases
+  - 用于下载匹配架构的 `sing-box` 内核
+
 - PowerShell
-- `curl.exe`
-- `Test-NetConnection`
+  - 用于 Windows 环境下测试端口监听、启动内核、验证代理是否可用
 
-## 2. 主要参考材料
+---
 
-### sing-box 官方资料
+## 2. 当前参考材料
 
-- 配置文档
-  - [https://sing-box.sagernet.org/zh/configuration/](https://sing-box.sagernet.org/zh/configuration/)
-- 官方仓库
-  - [https://github.com/SagerNet/sing-box](https://github.com/SagerNet/sing-box)
-- Release 页面
-  - [https://github.com/SagerNet/sing-box/releases](https://github.com/SagerNet/sing-box/releases)
+当前实现主要参考以下资料：
 
-### 节点解析参考
+- `sing-box` 官方中文配置文档
+  - `https://sing-box.sagernet.org/zh/configuration/`
 
-- `v2rayN`
-  - [https://github.com/2dust/v2rayN](https://github.com/2dust/v2rayN)
+- `sing-box` 官方 GitHub 仓库
+  - `https://github.com/SagerNet/sing-box`
+
+- `sing-box` Release 页面
+  - 用于版本列表同步和内核下载
+  - `https://github.com/SagerNet/sing-box/releases`
+
+- `v2rayN` 仓库
+  - 用于参考节点解析兼容思路
+  - `https://github.com/2dust/v2rayN`
 
 说明：
+- 项目实现不是直接复制官方文档，而是根据官方文档结构做工程化映射。
+- 某些协议字段、URI 兼容逻辑、DNS 生成方式是在工程调试中逐步修正的。
 
-- 订阅与单行节点解析逻辑参考了 `v2rayN` 的协议兼容思路
-- `sing-box` 配置字段以官方文档为准，不直接照搬旧版示例
+---
 
-## 3. 当前架构
+## 3. 当前项目真实架构
 
-当前项目分为三层：
+项目当前采用：
 
-- 管理层：`Node.js`
-- 代理层：`sing-box`
-- 展示层：静态 Web UI
+**`Node.js 管理层 + sing-box 内核层 + 静态 Web UI 层`**
 
-### 管理层职责
+### 3.1 管理层
 
-- 读写业务配置
-- 拉取并解析多订阅
-- 手动导入并解析节点
-- 维护节点组
-- 获取并缓存内核版本列表
-- 自动检测架构并规划下载版本
-- 下载与替换 `sing-box` 内核
-- 生成运行时配置
-- 控制 `sing-box` 进程
-- 维护运行日志和 fallback 状态
+由 `Node.js` 提供：
 
-### 代理层职责
+- 配置读写
+- 订阅拉取与解析
+- 节点和节点组管理
+- 版本列表管理
+- 内核下载管理
+- `sing-box` 配置生成
+- `sing-box` 进程启动 / 停止
+- 运行状态与日志 API
 
-- 提供多个本地 `SOCKS5` 入站
-- 连接远端节点
-- 执行出站转发
-- 处理 DNS 查询
-- 执行路由与出站绑定
+### 3.2 内核层
 
-### 展示层职责
+由 `sing-box` 提供：
 
-- 编辑基础配置
-- 编辑多个订阅地址
-- 编辑多个 `SOCKS5` 服务
-- 查看和管理节点
-- 管理节点组
-- 管理内核版本
-- 查看运行状态与实时日志
+- `SOCKS5` 入站监听
+- 代理流量转发
+- DNS 查询
+- 路由与出站选择
+- 节点连接与传输层处理
 
-## 4. 当前关键模块
+### 3.3 Web UI 层
 
-- `D:\sub2socks5\src\server.js`
-  - HTTP 服务入口与 API 路由
-  - 保存配置后自动生成并应用运行配置
-- `D:\sub2socks5\src\lib\subscription.js`
-  - 多订阅拉取
-  - 订阅解析
-  - 原始节点导入解析
-  - 节点去重
-- `D:\sub2socks5\src\lib\singbox-config.js`
-  - 业务配置转 `sing-box` 配置
-  - 多出口 DoH server 生成
-- `D:\sub2socks5\src\lib\storage.js`
-  - 默认配置
-  - 文件持久化
-  - 旧配置迁移
-- `D:\sub2socks5\src\lib\singbox-manager.js`
-  - `sing-box` 启停与日志收集
-- `D:\sub2socks5\src\lib\singbox-release.js`
-  - release 版本读取、过滤、下载、解压
-- `D:\sub2socks5\src\public\app.js`
-  - 首页交互逻辑
-- `D:\sub2socks5\src\public\nodes.js`
-  - 节点管理页交互逻辑
+由静态前端页面提供：
 
-## 5. 节点输入与解析策略
+- 基础配置编辑
+- 节点管理
+- 内核检测与下载
+- 运行状态查看
+- 实时日志查看
+- 表单 / JSON 双模式切换
 
-### 订阅解析
+---
 
-当前支持：
+## 4. 当前代码模块映射
 
-- 多行节点文本
-- Base64 订阅
+### `D:\sub2socks5\src\server.js`
+
+职责：
+- HTTP 服务入口
+- API 路由分发
+- 提供静态页面
+
+当前主要接口：
+- `/api/config`
+- `/api/subscription/refresh`
+- `/api/nodes`
+- `/api/kernel/*`
+- `/api/runtime/*`
+
+### `D:\sub2socks5\src\lib\storage.js`
+
+职责：
+- 初始化 `data / runtime / bin`
+- 保存和读取业务配置
+- 持久化订阅状态、架构、版本列表、计划版本
+- 维护默认配置
+
+### `D:\sub2socks5\src\lib\subscription.js`
+
+职责：
+- 拉取机场订阅
+- 自动识别和处理：
+  - 普通链接列表
+  - Base64 订阅
+  - URL Safe Base64
+- 解析常见节点协议
+
+### `D:\sub2socks5\src\lib\singbox-config.js`
+
+职责：
+- 将业务配置转换成 `sing-box` 配置
+- 合并：
+  - 订阅节点
+  - 手动节点
+  - 节点组
+- 生成：
+  - `dns`
+  - `inbounds`
+  - `outbounds`
+  - `route`
+  - `experimental`
+
+### `D:\sub2socks5\src\lib\singbox-manager.js`
+
+职责：
+- 启动 / 停止 `sing-box`
+- 保存运行日志
+- 提供当前运行状态
+
+### `D:\sub2socks5\src\lib\singbox-release.js`
+
+职责：
+- 检测系统平台和架构
+- 从 GitHub Release 获取版本信息
+- 选择匹配资产
+- 下载并安装内核
+
+### `D:\sub2socks5\src\public\app.js`
+
+职责：
+- 主页交互逻辑
+- 表单模式和 JSON 模式切换
+- 保存配置
+- 更新订阅
+- 生成配置
+- 启动 / 停止 `sing-box`
+- 架构检测、版本检测、版本更新、计划版本选择、内核下载
+- 日志和状态刷新
+
+### `D:\sub2socks5\src\public\nodes.js`
+
+职责：
+- 节点管理页逻辑
+- 添加手动节点
+- 添加节点组
+- 节点组成员选择
+- 保存节点配置
+- 通过 `localStorage` 通知主页刷新可选出口
+
+---
+
+## 5. 当前使用到的 sing-box 配置概念
+
+当前项目实际生成和使用的 `sing-box` 顶层配置有：
+
+- `log`
+- `dns`
+- `inbounds`
+- `outbounds`
+- `route`
+- `experimental`
+
+### 5.1 `log`
+
+用途：
+- 控制日志级别
+- 开启时间戳
+
+### 5.2 `dns`
+
+用途：
+- 定义 DNS 服务器
+- 指定默认解析器
+- 定义 DNS 规则
+- 尽量降低 DNS 泄漏
+
+### 5.3 `inbounds`
+
+当前仅使用：
+- `type: socks`
+
+用途：
+- 为本地不同端口提供多个 `SOCKS5` 入口
+
+### 5.4 `outbounds`
+
+当前使用的出站包括：
+
+- `direct`
+- `block`
+- 订阅节点出站
+- 手动节点出站
+- 节点组出站
+- `proxy`
+- `auto`
+
+### 5.5 `route`
+
+用途：
+- 根据入站匹配把流量发到指定出站
+- 控制默认出口
+- 控制默认域名解析器
+
+### 5.6 `experimental`
+
+当前使用：
+- `cache_file`
+- `clash_api`
+
+用途：
+- 提供缓存和兼容控制接口
+
+---
+
+## 6. 当前节点与节点组模型
+
+### 6.1 节点来源
+
+当前节点分为三类：
+
+- 内置节点
+  - `direct`
+- 订阅节点
+  - 从机场订阅解析而来
+- 手动节点
+  - 用户在节点管理页自行添加
+
+### 6.2 节点组
+
+当前节点组支持：
+
+- `urltest`
+- `fallback`
+
+说明：
+- `urltest` 已直接映射为 `sing-box` 的 `urltest`
+- `fallback` 当前为了兼容和稳定，暂时映射为更安全的选择器式行为，不完全等价于复杂原生 fallback 行为
+
+### 6.3 主页可选出口
+
+主页的默认路由出口和 `SOCKS5` 目标出口下拉框来自统一的可选出口列表。
+
+当前包含：
+- `proxy`
+- `auto`
+- `direct`
+- `block`
+- 所有订阅节点
+- 所有手动节点
+- 所有节点组
+
+---
+
+## 7. 当前 DNS 实现思路
+
+这是当前阶段最重要的实现背景之一。
+
+### 7.1 早期问题
+
+此前出现过这些实际问题：
+
+- 使用旧版 DNS 结构，`sing-box` 新版本报弃用或直接报错
+- 使用 `rcode://` 等旧形式会报：
+  - `unknown transport type: rcode`
+- 使用旧 inbound 字段会报：
+  - `legacy inbound fields are deprecated`
+- 代理端口虽能监听，但访问 Google 时 DNS 查询超时
+
+### 7.2 当前解决方案
+
+当前实际采用：
+
+- 远程 DoH：
+  - `https://cloudflare-dns.com/dns-query`
+- 引导 DNS：
+  - `223.5.5.5:53`
+- `dns-remote`
+  - 走代理出站
+- `dns-bootstrap`
+  - 作为域名解析引导器
+- `dns-direct`
+  - 本地直连解析器
+
+### 7.3 当前关键修复点
+
+真实修复过程里确认了以下结论：
+
+- 直接用 `https://1.1.1.1/dns-query` 作为默认 DoH 容易出现证书 / SNI / 解析问题
+- 给 `dns-bootstrap` 显式设置 `detour: direct` 会导致：
+  - `detour to an empty direct outbound makes no sense`
+- 将 `route.default_domain_resolver.server` 切到 `dns-bootstrap` 后，Google / Gstatic 代理访问恢复正常
+
+### 7.4 当前最终策略
+
+- 默认流量仍走代理出口
+- 域名首次解析优先使用引导 DNS
+- 远程 DoH 作为代理环境下的远程解析器
+- 这样兼顾了：
+  - 出网成功率
+  - 远程 DNS 使用
+  - 降低本机 DNS 泄漏风险
+
+---
+
+## 8. 当前订阅解析背景
+
+### 8.1 当前支持的输入形式
+
+- 普通按行分发的节点链接
+- Base64 编码订阅文本
 - URL Safe Base64 订阅
-- 多订阅 URL 汇总
+- 混合内容
 
-当前支持协议：
+### 8.2 当前支持协议
 
 - `vmess`
 - `vless`
@@ -141,319 +390,240 @@
 - `hysteria2`
 - `tuic`
 
-### 手动节点导入
+### 8.3 当前已修复的典型问题
 
-当前支持输入类型：
+- `shadowsocks` 某些 `userinfo` 为 Base64 的格式此前会被识别失败
+- 现在已支持类似：
+  - `ss://<base64-userinfo>@host:port#tag`
 
-1. 单行节点链接
-2. 多行节点文本
-3. 结构化 JSON
-4. 带 `raw` 字段的 JSON
+### 8.4 当前限制
 
-解析流程：
+- 不同机场会加入私有字段
+- 私有参数可能仍需继续兼容
+- 某些非常规 URI 仍可能需要追加解析规则
 
-1. 先判断是否为 JSON
-2. 如果是 JSON，优先按结构化节点处理
-3. 如果不是 JSON，则当作原始订阅 / 链接文本解析
-4. 先识别协议，再按协议模板做字段映射
+---
 
-补充说明：
+## 9. 当前内核下载背景
 
-- 已修复 Base64 订阅内容中 `raw` 字段导致的误判问题
-- 已兼容 `ss://base64-userinfo@host:port#tag` 这一类形式
-- 多订阅结果会按 `type + tag + server + port` 去重
+### 9.1 当前识别方式
 
-## 6. 多 SOCKS5 服务模型
+当前通过：
 
-当前不再只支持一个端口。
+- `process.platform`
+- `process.arch`
 
-每个 `SOCKS5` 服务包含：
+映射到：
 
-- `tag`
-- `listen`
-- `port`
-- `target`
+- `windows-amd64`
+- `windows-arm64`
+- `linux-amd64`
+- `linux-arm64`
+- `darwin-amd64`
+- `darwin-arm64`
 
-配置保存位置：
+### 9.2 当前下载逻辑
 
-- `config.ports[]`
+- 检测架构
+- 获取版本列表
+- 选择计划版本
+- 匹配当前架构资产
+- 下载压缩包
+- 解压安装内核
+- 更新 `app.singBoxBinary`
 
-生成运行配置时：
+### 9.3 版本列表策略
 
-- 每个 `ports[]` 条目生成一个 `socks` 入站
-- 每个入站按 tag 绑定到对应目标出站
-- 每个入站的 DNS `resolve` 规则绑定到对应出口的 DoH server
+当前版本列表会固化到文件：
 
-用途说明：
+- `D:\sub2socks5\data\release-list.json`
 
-- 一个本地软件可指向一个固定端口
-- 不同端口可分别使用不同节点或节点组出网
+策略：
+- 有本地版本列表时优先读取本地
+- 用户点击“检查版本更新”时再主动从 GitHub 同步
 
-## 7. DNS 方案与防泄漏思路
+---
 
-当前支持：
+## 10. 当前 Web UI 交互模型
 
-- DoH 服务器预设
-  - `https://dns.google/dns-query`
-  - `https://cloudflare-dns.com/dns-query`
-  - 自定义
-- Bootstrap DNS 预设
-  - `1.1.1.1`
-  - `8.8.8.8`
-  - `223.5.5.5`
-  - 自定义
+### 10.1 主页
 
-设计目标：
+当前主页包含：
 
-- 尽量避免本机直接 DNS 泄漏
-- 使用远端 DoH 完成主解析
-- 使用 Bootstrap DNS 解析 DoH 域名
-- 每个本地 `SOCKS5` 目标出口使用各自的 DoH detour
+- 架构检测
+- 内核状态查看
+- 版本列表选择
+- 拉取内核
+- 基础配置编辑
+- 订阅更新
+- 节点管理入口
+- 运行状态
+- 生成结果
+- 实时日志选项卡
 
-当前实践结论：
+### 10.2 视图模式
 
-- 直接使用公共 DoH 时，DNS 检测网站可能显示 DoH 服务商的全球 POP，而不一定代表本地运营商 DNS 泄漏
-- 旧实现会让所有 DoH 请求统一走默认 `proxy`
-- 新实现已修正为：
-  - `dns-remote-proxy`
-  - `dns-remote-<group-or-node-tag>`
-  - 每个端口按目标出口使用对应 DoH
+当前大部分区域支持：
 
-## 8. 节点组策略
+- 表单模式
+- JSON 模式
 
-### `urltest`
+说明：
+- 高频字段优先在表单模式下编辑
+- 复杂结构可切换到 JSON 模式查看
 
-- 映射为 `sing-box` 原生 `urltest`
-- 支持参数：
-  - 测试地址
-  - 测试间隔
-  - 超时毫秒
-- 测试地址支持预设：
-  - `https://www.gstatic.com/generate_204`
-  - `https://www.google.com/generate_204`
-  - `https://cp.cloudflare.com/generate_204`
-  - 自定义
-
-### `fallback`
-
-目标语义参考 Mihomo 风格故障转移：
-
-- 优先使用前面的节点
-- 定时探测可用性
-- 当前节点失效时切到下一个可用节点
-
-当前实现状态：
-
-- 不是 `sing-box` 原生出站类型
-- 当前为应用层第一版
-- 后端通过 `runtimeState.fallbackGroups` 维护状态
-- 节点管理页可显示：
-  - 当前活跃节点
-  - 最近切换时间
-
-当前探测思路：
-
-- 使用 `clash_api` 的延迟检测能力
-- 后端轮询组成员健康状态
-- 必要时改写当前选择并重新生成运行配置
-
-## 9. UI 交互经验与修复点
-
-### 表单失焦问题
-
-历史问题：
-
-- 编辑 `SOCKS5` 服务时输入框失焦
-- 打开节点下拉框后快速消失
-- 保存配置时出现状态被轮询覆盖
-
-根因：
-
-- 首页轮询刷新时重绘了表单与服务列表
-
-处理方式：
-
-- 增加交互态标记
-- 用户编辑中暂停表单回填
-- 避免在交互中重绘关键表单区域
-
-### 首页表单
-
-当前首页支持：
-
-- 多订阅地址列表
-- 多 SOCKS5 服务列表
-- DoH 预设与自定义输入
-- Bootstrap DNS 预设与自定义输入
-- 保存后自动生成运行配置
-- 运行中自动重启应用新配置
-
-基础设置布局现状：
-
-- 第一行：Web UI 基础参数
-- 第二行：DNS 策略、DoH 服务器、DoH 引导解析 DNS
-- 第三行：默认路由出口、自动启动
-- 自定义 DoH / 自定义引导解析 DNS 在需要时单独显示
-
-### 运行状态展示
-
-- 运行状态区域改成：
-  - `状态`
-  - `日志`
-- `日志` 直接显示 `sing-box` 实时日志
-
-### 节点管理页
+### 10.3 节点管理页
 
 当前节点管理页支持：
 
-- 现有节点使用圆角卡片展示
-- 卡片第一行显示节点名称
-- 第二行标签显示协议与来源
-- 节点组使用可展开面板
-- 折叠态显示概览，展开态显示成员与编辑区
-- 节点组在可选出口里排在普通节点前面
+- 手动节点管理
+- 节点组管理
+- 节点组成员按行添加
+- 保存后主页自动刷新出口列表
 
-### 下载进度展示
+---
 
-- 不再保留顶部全局下载条
-- 仅在实际下载内核时，将进度写入原消息区域
+## 11. 当前测试材料与测试方法
 
-## 10. API 能力
+### 11.1 当前测试材料
 
-### 配置
+当前已经用于实际联调的材料包括：
 
-- `GET /api/config`
-- `POST /api/config`
-  - 保存业务配置
-  - 自动生成新配置
-  - 如果运行中，则自动重启 `sing-box`
+- 真实机场订阅链接
+- 已安装的 `sing-box.exe`
+- 生成后的 `runtime\sing-box.json`
+- PowerShell
+- `curl.exe`
+- Google / Gstatic 的 `generate_204` 接口
 
-### 订阅
+### 11.2 当前测试指标
 
-- `POST /api/subscription/refresh`
+当前关注：
 
-### 节点
+- Web UI 是否可访问
+- 节点是否能解析成功
+- 节点组保存后主页是否立即可见
+- `sing-box` 是否能正常启动
+- `SOCKS5` 端口是否监听成功
+- 通过代理访问外部站点是否成功
 
-- `GET /api/nodes`
-- `POST /api/nodes`
-- `POST /api/nodes/import`
+### 11.3 当前已验证通过的结果
 
-### 内核
+已经真实验证通过：
 
-- `GET /api/kernel/status`
-- `POST /api/kernel/architecture`
-- `GET /api/kernel/releases`
-- `POST /api/kernel/releases/update`
-- `POST /api/kernel/plan`
-- `GET /api/kernel/download`
-- `POST /api/kernel/download`
+- `SOCKS5` 端口监听成功
+- 通过代理访问：
+  - `https://www.google.com/generate_204`
+  - `https://www.gstatic.com/generate_204`
+- 返回码均为：
+  - `204`
 
-### 运行时
+说明：
+- 这代表当前代理链路、DNS、出站转发在现阶段已经可以正常工作
 
-- `POST /api/runtime/generate`
-- `POST /api/runtime/start`
-- `POST /api/runtime/stop`
-- `GET /api/runtime/generated`
-- `GET /api/runtime/logs`
+---
 
-## 11. 当前测试方法
+## 12. 当前已知限制
 
-### 获取配置
+- `singbox-manager.js` 在当前某些沙箱环境下直接 `spawn` `sing-box.exe` 会遇到 `EPERM`
+  - 这属于当前测试环境限制，不是最终 Windows 实机必然问题
+- 节点组 `fallback` 还不是完整高级语义实现
+- 手动节点表单仍比较基础
+- 某些复杂协议私有参数还未完全补齐
+- 目前更偏向“可用原型 + 持续修正”，不是最终成熟版控制面板
 
-```powershell
-Invoke-RestMethod -Uri "http://127.0.0.1:18080/api/config"
-```
+---
 
-### 获取节点
+## 13. 后续继续开发时优先关注
 
-```powershell
-Invoke-RestMethod -Uri "http://127.0.0.1:18080/api/nodes"
-```
+建议继续优先核对：
 
-### 导入手动节点
+- 官方 `sing-box` 最新 DNS 配置结构
+- 各协议出站字段是否继续变化
+- `route.rules` / `action` 的最新写法
+- `selector` / `urltest` / `direct` / `block` 是否新增字段
+- 节点组高级能力是否可继续完善
+- 手动节点表单是否按协议细分
 
-```powershell
-$body = @{
-  raw = "vless://uuid@example.com:443?security=tls&sni=example.com#my-node"
-} | ConvertTo-Json
+---
 
-Invoke-RestMethod `
-  -Uri "http://127.0.0.1:18080/api/nodes/import" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body $body
-```
+## 14. 本文件用途
 
-### 保存配置并自动应用
+本文件不是官方文档副本，而是当前项目阶段的工程背景记录。
 
-```powershell
-$config = Invoke-RestMethod -Uri "http://127.0.0.1:18080/api/config"
+它主要用于：
 
-Invoke-RestMethod `
-  -Uri "http://127.0.0.1:18080/api/config" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body ($config.config | ConvertTo-Json -Depth 20)
-```
+- 记录当前真正用到了哪些技术
+- 记录实现过程中参考了哪些材料
+- 记录项目与 `sing-box` 配置概念之间的映射关系
+- 记录当前已经踩过和修掉的关键问题
+- 方便后续继续开发时减少重复排查成本
 
-### 启动运行时
+---
 
-```powershell
-Invoke-RestMethod `
-  -Uri "http://127.0.0.1:18080/api/runtime/start" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body "{}"
-```
+## 15. SEA 打包信息
 
-### 检查 SOCKS5 端口
+当前项目支持使用 Node.js SEA（Single Executable Applications）打包为 Windows 单文件可执行程序。
+
+### 前置要求
+
+- Node.js 24.x
+- 在项目根目录执行打包命令
+
+### 安装依赖
 
 ```powershell
-Test-NetConnection -ComputerName 127.0.0.1 -Port 53456
+npm install
 ```
 
-### 通过代理访问 Google
+### 构建命令
 
 ```powershell
-curl.exe --socks5-hostname 127.0.0.1:53456 --max-time 25 https://www.google.com/generate_204 -I -s -o NUL -w "%{http_code}"
+npm run build:sea
 ```
 
-### 通过代理访问 Gstatic
+### 输出位置
 
-```powershell
-curl.exe --socks5-hostname 127.0.0.1:53456 --max-time 25 https://www.gstatic.com/generate_204 -I -s -o NUL -w "%{http_code}"
-```
+- `D:\sub2socks5\dist\sub2socks5-sea.exe`
 
-## 12. 当前测试结论
+### 当前 SEA 打包链路
 
-已完成验证：
+当前流程涉及以下文件：
 
-- Web UI 启动正常
-- `GET /api/config` 正常
-- `GET /api/nodes` 正常
-- `POST /api/nodes/import` 可成功导入 `vless://...`
-- `SOCKS5` 端口监听正常
-- 代理访问 Google / Gstatic 返回 `204`
-- 多出口 DoH server 生成符合预期
-- 节点组在出口列表中优先于普通节点显示
+- `scripts/build-sea.mjs`
+  - 负责收集静态资源、生成 SEA blob，并向 `node.exe` 注入 blob
+- `scripts/sea-entry.cjs`
+  - 作为 SEA 的 CommonJS bootstrap 入口
+  - 通过动态 `import()` 启动真正的服务端逻辑
+- `src/server.js`
+  - 已改为可复用的 `startServer()` 启动形式
+- `src/lib/storage.js`
+  - 已兼容源码模式与 SEA 模式下的运行目录解析
 
-环境说明：
+### SEA 模式运行特征
 
-- 当前在本地 PowerShell 环境中可验证真实代理链路
-- 某些沙箱环境中 `sing-box` 子进程可能触发 `spawn EPERM`
-- 这类问题属于环境限制，不等同于程序逻辑错误
+- 可执行文件只内嵌：
+  - Node.js 应用代码
+  - `src/public` 下的静态资源
+- `sing-box` 内核不会嵌入 exe
+- 首次运行时如果缺少配置文件，会自动生成默认配置
+- 可执行文件运行后会在同级目录创建或使用：
+  - `data`
+  - `runtime`
+  - `bin`
 
-## 13. 当前已知限制
+### 已处理的问题
 
-- `fallback` 仍是第一版，不是完整 Mihomo 语义
-- 某些机场私有字段仍可能需要继续兼容
-- 结构化 JSON 输入仍可继续补全协议默认字段
-- 内核下载速度仍受 GitHub 网络质量影响
-- 当前运行中配置应用方式为“自动重启”，不是 sing-box 原生热更新
+- 首次运行缺少配置文件时自动生成默认配置
+- 修复 SEA 模式下误把新建的 `data/runtime/bin` 当作旧目录迁移的问题
+- 使用 CJS bootstrap 兼容 Node SEA 的入口要求
 
-## 14. 后续建议
+### 当前注意事项
 
-- 给手动导入增加预览与校验结果提示
-- 为节点健康检查增加更直观的 UI 展示
-- 增强 `fallback` 的回切逻辑
-- 增加更多代理链路诊断工具
+- 构建后可能出现 `signature seems corrupted` 提示
+  - 这是将应用 blob 注入 `node.exe` 后的常见现象
+  - 不代表构建失败
+  - 如果用于正式分发，建议重新进行代码签名
+- 构建阶段可能出现与 `import.meta` 相关的 warning
+  - 当前版本通过入口隔离规避了运行时问题
+  - 现阶段不影响生成可执行文件

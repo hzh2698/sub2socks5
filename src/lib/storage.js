@@ -2,14 +2,19 @@ import { mkdir, readFile, writeFile, access, readdir, copyFile, rm, stat } from 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const currentModuleUrl = typeof import.meta !== 'undefined' && import.meta?.url
+  ? import.meta.url
+  : `file:///${__filename.replaceAll('\\', '/')}`;
+const isSeaMode = Boolean(process.execPath && process.execPath.endsWith('.exe'));
+const moduleDir = path.dirname(fileURLToPath(currentModuleUrl));
 const srcDir = path.dirname(moduleDir);
+const runtimeBaseDir = isSeaMode ? path.dirname(process.execPath) : srcDir;
 
-export const dataDir = path.join(srcDir, 'data');
-export const runtimeDir = path.join(srcDir, 'runtime');
+export const dataDir = path.join(runtimeBaseDir, 'data');
+export const runtimeDir = path.join(runtimeBaseDir, 'runtime');
 export const publicDir = path.join(srcDir, 'public');
-export const binDir = path.join(srcDir, 'bin');
-export const projectDir = path.dirname(srcDir);
+export const binDir = path.join(runtimeBaseDir, 'bin');
+export const projectDir = isSeaMode ? path.dirname(process.execPath) : path.dirname(srcDir);
 export const appConfigPath = path.join(dataDir, 'app-config.json');
 export const generatedConfigPath = path.join(runtimeDir, 'sing-box.json');
 export const architectureInfoPath = path.join(dataDir, 'architecture-info.json');
@@ -107,10 +112,12 @@ export const defaultConfig = {
 };
 
 export async function ensureDirs() {
+  if (!isSeaMode) {
+    await migrateLegacyLayout();
+  }
   await mkdir(dataDir, { recursive: true });
   await mkdir(runtimeDir, { recursive: true });
   await mkdir(binDir, { recursive: true });
-  await migrateLegacyLayout();
 }
 
 export async function loadConfig() {
