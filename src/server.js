@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import {
   loadSubscriptionState,
@@ -295,6 +296,25 @@ const server = http.createServer(async (req, res) => {
       return methodNotAllowed(res, ['GET', 'POST']);
     }
 
+    if (url.pathname === '/api/ports/next') {
+      if (req.method === 'POST') {
+        const body = await readJson(req);
+        const host = normalizeListenHost(body.host || '127.0.0.1');
+        const start = Number(body.start || 0);
+        const exclude = new Set(
+          Array.isArray(body.exclude)
+            ? body.exclude.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item > 0)
+            : []
+        );
+        if (!Number.isInteger(start) || start <= 0) {
+          return fail(res, 400, 'Invalid start port');
+        }
+        const port = await findAvailablePort(host, start, exclude);
+        return ok(res, { host, port });
+      }
+      return methodNotAllowed(res, ['POST']);
+    }
+
     if (url.pathname === '/api/runtime/logs') {
       if (req.method === 'GET') {
         return ok(res, manager.getStatus());
@@ -357,6 +377,9 @@ const server = http.createServer(async (req, res) => {
 
 export async function startServer() {
   appConfig = await loadConfig();
+  appConfig.app.host = normalizeListenHost(appConfig.app.host || '0.0.0.0');
+  appConfig.app.port = await findAvailablePort(appConfig.app.host, Number(appConfig.app.port || 18080));
+  await saveConfig(appConfig);
   subscriptionState = (await loadSubscriptionState()) || {
     raw: '',
     nodes: [],
@@ -392,6 +415,37 @@ export async function startServer() {
   });
 
   return server;
+}
+
+function normalizeListenHost(host) {
+  const value = String(host || '').trim();
+  return value || '0.0.0.0';
+}
+
+async function findAvailablePort(host, startPort, exclude = new Set()) {
+  let port = Number(startPort);
+  while (port <= 65535) {
+    if (!exclude.has(port) && await isPortAvailable(host, port)) {
+      return port;
+    }
+    port += 1;
+  }
+  throw new Error(`No available port found from ${startPort}`);
+}
+
+function isPortAvailable(host, port) {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    let settled = false;
+    const finish = (available) => {
+      if (settled) return;
+      settled = true;
+      probe.close(() => resolve(available));
+    };
+    probe.once('error', () => finish(false));
+    probe.once('listening', () => finish(true));
+    probe.listen(port, host);
+  });
 }
 
 if (process.env.SUB2SOCKS5_SEA_BOOTSTRAP !== '1') {

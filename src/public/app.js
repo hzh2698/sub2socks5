@@ -1,4 +1,4 @@
-const editor = document.getElementById('config-editor');
+﻿const editor = document.getElementById('config-editor');
 const nodesEl = document.getElementById('nodes');
 const runtimeEl = document.getElementById('runtime');
 const generatedEl = document.getElementById('generated');
@@ -484,7 +484,7 @@ function fillForm(config) {
     : (config.subscription?.url ? [config.subscription.url] : ['']);
 
   formSubscriptionUrls = urls.map((url) => ({ url }));
-  fields.appHost.value = config.app?.host || '127.0.0.1';
+  fields.appHost.value = config.app?.host || '0.0.0.0';
   fields.appPort.value = config.app?.port || 18080;
   fields.appBinary.value = config.app?.singBoxBinary || '';
   fields.appLogLevel.value = config.app?.logLevel || 'info';
@@ -522,6 +522,34 @@ function createDefaultPort() {
     target: fields.routeFinal?.value || latestData.config?.routing?.routeFinal || 'proxy',
     sniff: true
   };
+}
+
+async function resolveNextPort(host, start, exclude = []) {
+  const data = await post('/api/ports/next', { host, start, exclude });
+  return Number(data.port || start);
+}
+
+async function assignMissingSuggestedPorts() {
+  const host = '127.0.0.1';
+  const used = new Set(
+    formPorts
+      .map((item) => Number(item.port))
+      .filter((value) => Number.isInteger(value) && value > 0)
+  );
+
+  let changed = false;
+  for (let index = 0; index < formPorts.length; index += 1) {
+    if (Number(formPorts[index].port) > 0) continue;
+    const start = index === 0
+      ? Number(fields.appPort.value || 18080) + 1
+      : Number(formPorts[index - 1].port || 0) + 1;
+    const nextPort = await resolveNextPort(host, start, [...used]);
+    formPorts[index].port = nextPort;
+    used.add(nextPort);
+    changed = true;
+  }
+
+  return changed;
 }
 
 function createDefaultSubscriptionUrl() {
@@ -833,12 +861,17 @@ addSubscriptionUrlButton?.addEventListener('click', () => {
 });
 
 addSocksServiceButton?.addEventListener('click', () => {
-  formPorts.push(createDefaultPort());
-  renderSocksServices();
-  formTouched = true;
-  updateEditorState();
+  action('添加 SOCKS5 服务', async () => {
+    formPorts.push(createDefaultPort());
+    const changed = await assignMissingSuggestedPorts();
+    renderSocksServices();
+    if (changed) {
+      updateEditorState();
+    }
+    formTouched = true;
+    updateEditorState();
+  });
 });
-
 document.addEventListener('input', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
@@ -944,6 +977,21 @@ fields.dnsBootstrapPreset.addEventListener('change', () => {
   updateEditorState();
 });
 
+fields.appPort?.addEventListener('change', async () => {
+  if (!formPorts.length) return;
+  const currentAppPort = Number(fields.appPort.value || 18080);
+  const firstPort = Number(formPorts[0]?.port || 0);
+  if (!firstPort || firstPort <= currentAppPort) {
+    formPorts[0].port = '';
+    const changed = await assignMissingSuggestedPorts();
+    if (changed) {
+      renderSocksServices();
+    }
+    formTouched = true;
+    updateEditorState();
+  }
+});
+
 switchFormButton.addEventListener('click', () => switchView('form'));
 switchJsonButton.addEventListener('click', () => switchView('json'));
 editor.addEventListener('input', updateEditorState);
@@ -998,3 +1046,4 @@ setInterval(() => {
     })
     .catch(() => {});
 }, 2000);
+

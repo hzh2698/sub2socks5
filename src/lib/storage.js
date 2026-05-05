@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const currentModuleUrl = typeof import.meta !== 'undefined' && import.meta?.url
   ? import.meta.url
   : `file:///${__filename.replaceAll('\\', '/')}`;
-const isSeaMode = Boolean(process.execPath && process.execPath.endsWith('.exe'));
+const isSeaMode = process.env.SUB2SOCKS5_SEA_BOOTSTRAP === '1';
 const moduleDir = path.dirname(fileURLToPath(currentModuleUrl));
 const srcDir = path.dirname(moduleDir);
 const runtimeBaseDir = isSeaMode ? path.dirname(process.execPath) : srcDir;
@@ -29,7 +29,7 @@ const defaultBinaryRelativePath = path.join('src', 'bin', process.platform === '
 
 export const defaultConfig = {
   app: {
-    host: '127.0.0.1',
+    host: '0.0.0.0',
     port: 18080,
     singBoxBinary: defaultBinaryRelativePath,
     autoStart: false,
@@ -104,7 +104,7 @@ export const defaultConfig = {
     {
       tag: 'default-socks',
       listen: '127.0.0.1',
-      port: 1080,
+      port: 18081,
       target: 'proxy',
       sniff: true
     }

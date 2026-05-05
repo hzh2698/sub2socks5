@@ -1,0 +1,75 @@
+name: Reusable Build
+
+on:
+  workflow_call:
+
+jobs:
+  build:
+    name: Build (${{ matrix.target_name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target_name: linux-x64
+            binary_name: sub2socks5-linux-x64
+            archive_name: sub2socks5-linux-x64.zip
+          - runner: ubuntu-24.04-arm
+            target_name: linux-arm64
+            binary_name: sub2socks5-linux-arm64
+            archive_name: sub2socks5-linux-arm64.zip
+          - runner: windows-latest
+            target_name: windows-x64
+            binary_name: sub2socks5-windows-x64.exe
+            archive_name: sub2socks5-windows-x64.zip
+          - runner: windows-11-arm
+            target_name: windows-arm64
+            binary_name: sub2socks5-windows-arm64.exe
+            archive_name: sub2socks5-windows-arm64.zip
+          - runner: macos-15-intel
+            target_name: macos-x64
+            binary_name: sub2socks5-macos-x64
+            archive_name: sub2socks5-macos-x64.zip
+          - runner: macos-latest
+            target_name: macos-arm64
+            binary_name: sub2socks5-macos-arm64
+            archive_name: sub2socks5-macos-arm64.zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build SEA binary
+        env:
+          SUB2SOCKS5_OUTPUT_NAME: ${{ matrix.binary_name }}
+        run: npm run build:sea
+
+      - name: Package artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/${{ matrix.binary_name }} -DestinationPath dist/${{ matrix.archive_name }} -Force
+
+      - name: Package artifact (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd dist
+          zip -j "${{ matrix.archive_name }}" "${{ matrix.binary_name }}"
+
+      - name: Archive build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target_name }}
+          path: dist/${{ matrix.archive_name }}
+          if-no-files-found: error

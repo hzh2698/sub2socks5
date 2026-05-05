@@ -457,3 +457,73 @@ http://127.0.0.1:18080
 
 - SEA 注入后可能出现 `signature seems corrupted` 提示，这是 Node 可执行文件注入应用 blob 后的常见现象
 - 这不代表构建失败；如果要正式分发，建议重新进行代码签名
+
+## GitHub Actions
+
+项目已提供 GitHub Actions 工作流，支持手动触发全平台构建，以及手动触发构建后发布到 GitHub Release。
+
+### 工作流文件
+
+- `D:\sub2socks5\.github\workflows\reusable-build.yml`
+  - 可复用构建模板
+  - 统一维护平台与架构矩阵
+- `D:\sub2socks5\.github\workflows\build.yml`
+  - 手动触发
+  - 只构建，不发布
+- `D:\sub2socks5\.github\workflows\release.yml`
+  - 手动触发
+  - 先构建，再发布到 GitHub Release
+
+### 当前构建目标
+
+- `linux-x64`
+- `linux-arm64`
+- `windows-x64`
+- `windows-arm64`
+- `macos-x64`
+- `macos-arm64`
+
+### 产物规则
+
+- 每个平台/架构单独构建一个二进制文件
+- 每个平台/架构单独打包为一个 zip
+- 每个 zip 中只包含一个二进制文件
+
+产物命名示例：
+
+- `sub2socks5-linux-x64.zip`
+- `sub2socks5-linux-arm64.zip`
+- `sub2socks5-windows-x64.zip`
+- `sub2socks5-windows-arm64.zip`
+- `sub2socks5-macos-x64.zip`
+- `sub2socks5-macos-arm64.zip`
+
+### 手动构建
+
+1. 打开 GitHub 仓库的 `Actions`
+2. 选择 `Build`
+3. 点击 `Run workflow`
+
+构建完成后，可在该次 workflow 的 `Artifacts` 中下载各平台压缩包。
+
+### 手动发布 Release
+
+1. 打开 GitHub 仓库的 `Actions`
+2. 选择 `Release`
+3. 点击 `Run workflow`
+4. 填写：
+   - `release_tag`
+   - `release_name`
+
+`Release` 工作流会：
+
+- 自动构建全部平台/架构产物
+- 自动收集所有 zip
+- 自动创建或更新对应的 GitHub Release
+- 自动把所有 zip 上传到 Release 附件
+
+### 说明
+
+- `Build` 适合日常验证构建是否正常
+- `Release` 适合正式生成发布附件
+- 如果后续要增减平台或架构，只需要修改 `D:\sub2socks5\.github\workflows\reusable-build.yml`

@@ -15,7 +15,8 @@ const assetsJsonPath = path.join(seaPrepDir, 'public-assets.json');
 const bundlePath = path.join(seaPrepDir, 'sea-entry.cjs');
 const seaConfigPath = path.join(seaPrepDir, 'sea-config.json');
 const blobPath = path.join(seaPrepDir, 'sea-prep.blob');
-const outputExePath = path.join(distDir, 'sub2socks5-sea.exe');
+const outputBinaryName = getOutputBinaryName();
+const outputExePath = path.join(distDir, outputBinaryName);
 const nodeExe = process.execPath;
 
 await rm(seaPrepDir, { recursive: true, force: true });
@@ -57,6 +58,17 @@ await inject(outputExePath, 'NODE_SEA_BLOB', await readFile(blobPath), {
 });
 
 console.log(`SEA executable created: ${outputExePath}`);
+
+function getOutputBinaryName() {
+  const customName = process.env.SUB2SOCKS5_OUTPUT_NAME?.trim();
+  if (customName) {
+    return customName;
+  }
+  if (process.platform === 'win32') {
+    return 'sub2socks5-sea.exe';
+  }
+  return 'sub2socks5-sea';
+}
 
 async function collectAssets(rootDir, currentDir) {
   const entries = await import('node:fs/promises').then((fs) => fs.readdir(currentDir, { withFileTypes: true }));

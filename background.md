@@ -627,3 +627,66 @@ npm run build:sea
 - 构建阶段可能出现与 `import.meta` 相关的 warning
   - 当前版本通过入口隔离规避了运行时问题
   - 现阶段不影响生成可执行文件
+
+---
+
+## 16. GitHub Actions 构建与发布
+
+当前项目已接入 GitHub Actions，用于手动触发全平台构建，以及手动触发构建后发布到 GitHub Release。
+
+### 工作流结构
+
+- `D:\sub2socks5\.github\workflows\reusable-build.yml`
+  - 可复用构建模板
+  - 统一维护平台与架构矩阵
+  - 统一负责安装依赖、构建 SEA、单文件 zip 打包、上传 artifact
+- `D:\sub2socks5\.github\workflows\build.yml`
+  - 手动触发
+  - 只构建，不发布
+- `D:\sub2socks5\.github\workflows\release.yml`
+  - 手动触发
+  - 先调用构建流程，再自动发布到 GitHub Release
+
+### 当前构建目标
+
+- `linux-x64`
+- `linux-arm64`
+- `windows-x64`
+- `windows-arm64`
+- `macos-x64`
+- `macos-arm64`
+
+### 产物策略
+
+- 每个平台/架构单独构建一个二进制文件
+- 每个平台/架构单独打包为一个 zip
+- 每个 zip 只包含一个二进制文件
+
+当前产物命名示例：
+
+- `sub2socks5-linux-x64.zip`
+- `sub2socks5-linux-arm64.zip`
+- `sub2socks5-windows-x64.zip`
+- `sub2socks5-windows-arm64.zip`
+- `sub2socks5-macos-x64.zip`
+- `sub2socks5-macos-arm64.zip`
+
+### 发布流程说明
+
+`Release` 工作流需要输入：
+
+- `release_tag`
+- `release_name`
+
+执行流程为：
+
+1. 构建全部平台与架构
+2. 收集所有 zip artifact
+3. 创建或更新对应的 GitHub Release
+4. 把所有 zip 上传为 Release 附件
+
+### 工程意义
+
+- 把构建矩阵抽到 `reusable-build.yml` 后，只需维护一份平台配置
+- `build.yml` 与 `release.yml` 已实现职责分离
+- 后续若要增减平台、架构或调整命名规则，只需要优先修改 `D:\sub2socks5\.github\workflows\reusable-build.yml`

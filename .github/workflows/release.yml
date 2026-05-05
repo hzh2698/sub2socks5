@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to create or update
+        required: true
+        default: nightly
+      release_name:
+        description: Release display name
+        required: true
+        default: nightly
+
+jobs:
+  build:
+    uses: ./.github/workflows/reusable-build.yml
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Collect archives
+        shell: bash
+        run: |
+          mkdir -p release-upload
+          find release-assets -type f -name "*.zip" -exec cp {} release-upload/ \;
+          ls -la release-upload
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag }}
+          name: ${{ github.event.inputs.release_name }}
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          append_body: false
+          make_latest: true
+          generate_release_notes: false
+          files: release-upload/*.zip
