@@ -4,3 +4,9 @@ node_modules/
 .DS_Store
 runtime/singbox-test.*.log
 dist
+src/data/
+src/runtime/
+data/
+runtime/
+bin/
+sea-prep/
