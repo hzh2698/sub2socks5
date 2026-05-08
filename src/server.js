@@ -235,7 +235,11 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/kernel/plan') {
       if (req.method === 'POST') {
         const body = await readJson(req);
-        releaseListState = await ensureReleaseList(false);
+        const requestedAssetSuffix = typeof body?.assetSuffix === 'string' ? body.assetSuffix.trim() : '';
+        if (requestedAssetSuffix) {
+          architectureState = await ensureArchitectureState(requestedAssetSuffix);
+        }
+        releaseListState = await ensureReleaseList(true);
         const selected = releaseListState.find((item) => item.version === body.version);
         if (!selected) {
           return fail(res, 404, 'Requested kernel version not found');

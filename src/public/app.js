@@ -93,6 +93,9 @@ let downloadInFlight = false;
 let formPorts = [];
 let formSubscriptionUrls = [];
 let isFormInteracting = false;
+let selectedKernelArch = 'windows-amd64';
+let selectedKernelVersion = '';
+let kernelArchManuallySelected = false;
 
 async function load() {
   const [configData, generatedData, logsData, downloadData] = await Promise.all([
@@ -171,12 +174,16 @@ function renderOverview() {
 }
 
 function renderArchitectureSelector() {
-  kernelArchSelect.value = latestData.architecture?.assetSuffix || 'windows-amd64';
+  const detected = latestData.architecture?.assetSuffix;
+  if (detected && !kernelArchManuallySelected) {
+    selectedKernelArch = detected;
+  }
+  kernelArchSelect.value = selectedKernelArch || detected || 'windows-amd64';
 }
 
 function renderKernelVersionOptions() {
   const releases = latestData.releaseList || [];
-  const selectedVersion = latestData.plannedKernel?.version || '';
+  const selectedVersion = selectedKernelVersion || latestData.plannedKernel?.version || '';
   kernelVersionSelect.innerHTML = '';
 
   if (!releases.length) {
@@ -200,6 +207,7 @@ function renderKernelVersionOptions() {
   if (!kernelVersionSelect.value && releases[0]) {
     kernelVersionSelect.value = releases[0].version;
   }
+  selectedKernelVersion = kernelVersionSelect.value;
 
   kernelVersionSelect.disabled = false;
   kernelSelectVersionButton.disabled = false;
@@ -763,7 +771,15 @@ async function action(label, fn) {
 }
 
 async function detectArchitectureAndLoadReleases() {
-  await post('/api/kernel/architecture', { assetSuffix: kernelArchSelect.value });
+  // Real auto-detection from current runtime platform.
+  kernelArchManuallySelected = false;
+  await post('/api/kernel/architecture', {});
+  await api('/api/kernel/releases');
+  selectedKernelVersion = '';
+}
+
+async function applySelectedArchitectureAndLoadReleases() {
+  await post('/api/kernel/architecture', { assetSuffix: selectedKernelArch || kernelArchSelect.value });
   await api('/api/kernel/releases');
 }
 
@@ -771,9 +787,12 @@ async function startDownloadFlow() {
   downloadInFlight = true;
   setBusy(false);
   try {
-    await detectArchitectureAndLoadReleases();
+    await applySelectedArchitectureAndLoadReleases();
     if (kernelVersionSelect.value) {
-      await post('/api/kernel/plan', { version: kernelVersionSelect.value });
+      await post('/api/kernel/plan', {
+        version: kernelVersionSelect.value,
+        assetSuffix: selectedKernelArch || kernelArchSelect.value
+      });
     }
     await post('/api/kernel/download');
     await load();
@@ -835,8 +854,14 @@ kernelCheckUpdatesButton.onclick = () => action('检查版本更新', async () =
 });
 
 kernelSelectVersionButton.onclick = () => action('设为计划版本', async () => {
+  await applySelectedArchitectureAndLoadReleases();
   if (!kernelVersionSelect.value) throw new Error('请先选择一个内核版本');
-  await post('/api/kernel/plan', { version: kernelVersionSelect.value });
+  selectedKernelVersion = kernelVersionSelect.value;
+  kernelArchManuallySelected = false;
+  await post('/api/kernel/plan', {
+    version: kernelVersionSelect.value,
+    assetSuffix: selectedKernelArch || kernelArchSelect.value
+  });
 });
 
 document.getElementById('kernel-download').onclick = async () => {
@@ -948,6 +973,8 @@ document.addEventListener('click', (event) => {
 });
 
 kernelArchSelect.addEventListener('change', () => {
+  kernelArchManuallySelected = true;
+  selectedKernelArch = kernelArchSelect.value;
   const [os, archName] = kernelArchSelect.value.split('-');
   latestData.architecture = {
     ...(latestData.architecture || {}),
@@ -955,7 +982,10 @@ kernelArchSelect.addEventListener('change', () => {
     archName,
     assetSuffix: kernelArchSelect.value
   };
-  renderArchitectureSelector();
+});
+
+kernelVersionSelect.addEventListener('change', () => {
+  selectedKernelVersion = kernelVersionSelect.value;
 });
 
 fields.dnsRemotePreset.addEventListener('change', () => {
