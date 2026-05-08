@@ -3,14 +3,14 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: Release tag to create or update
-        required: true
+      release_tag_prefix:
+        description: Release tag prefix
+        required: false
         default: nightly
       release_name:
         description: Release display name
-        required: true
-        default: nightly
+        required: false
+        default: ""
 
 jobs:
   build:
@@ -26,6 +26,27 @@ jobs:
       contents: write
 
     steps:
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          PREFIX="${{ github.event.inputs.release_tag_prefix }}"
+          if [ -z "$PREFIX" ]; then
+            PREFIX="nightly"
+          fi
+          TS="$(date -u +'%Y%m%d-%H%M%S')"
+          TAG="${PREFIX}-${TS}-run${{ github.run_number }}"
+
+          NAME_INPUT="${{ github.event.inputs.release_name }}"
+          if [ -z "$NAME_INPUT" ]; then
+            NAME="$TAG"
+          else
+            NAME="$NAME_INPUT ($TAG)"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -38,11 +59,11 @@ jobs:
           find release-assets -type f -name "*.zip" -exec cp {} release-upload/ \;
           ls -la release-upload
 
-      - name: Create or update release
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.release_tag }}
-          name: ${{ github.event.inputs.release_name }}
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
