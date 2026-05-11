@@ -3,14 +3,9 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      release_tag_prefix:
-        description: Release tag prefix
-        required: false
-        default: nightly
-      release_name:
-        description: Release display name
-        required: false
-        default: ""
+      release_version:
+        description: Release version (example: v1.0.0)
+        required: true
 
 jobs:
   build:
@@ -30,19 +25,14 @@ jobs:
         id: meta
         shell: bash
         run: |
-          PREFIX="${{ github.event.inputs.release_tag_prefix }}"
-          if [ -z "$PREFIX" ]; then
-            PREFIX="nightly"
+          VERSION="${{ github.event.inputs.release_version }}"
+          VERSION="$(echo "$VERSION" | tr -d '[:space:]')"
+          if [ -z "$VERSION" ]; then
+            echo "release_version is required"
+            exit 1
           fi
-          TS="$(date -u +'%Y%m%d-%H%M%S')"
-          TAG="${PREFIX}-${TS}-run${{ github.run_number }}"
-
-          NAME_INPUT="${{ github.event.inputs.release_name }}"
-          if [ -z "$NAME_INPUT" ]; then
-            NAME="$TAG"
-          else
-            NAME="$NAME_INPUT ($TAG)"
-          fi
+          TAG="$VERSION"
+          NAME="sub2socks5 $VERSION"
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
