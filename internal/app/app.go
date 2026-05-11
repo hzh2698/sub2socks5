@@ -9,13 +9,15 @@ import (
     "encoding/json"
     "errors"
     "fmt"
-    "io"
+	"io"
+	"io/fs"
     "net"
     "net/http"
     "net/url"
-    "os"
-    "os/exec"
-    "path/filepath"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -40,9 +42,14 @@ type App struct {
     runtimeDir  string
     binDir      string
     publicDir   string
+    staticFS    fs.FS
 }
 
 func Run() error {
+    return RunWithStaticFS(nil)
+}
+
+func RunWithStaticFS(staticFS fs.FS) error {
     cwd, err := os.Getwd()
     must(err)
 	app := &App{
@@ -51,6 +58,7 @@ func Run() error {
 		runtimeDir: filepath.Join(cwd, "internal", "runtime"),
 		binDir:     filepath.Join(cwd, "internal", "bin"),
 		publicDir:  filepath.Join(cwd, "internal", "public"),
+        staticFS:   staticFS,
         runtimeInfo: map[string]any{
             "state":   "stopped",
             "running": false,
@@ -616,19 +624,27 @@ func (a *App) handleStatic(w http.ResponseWriter, r *http.Request) {
     if p == "/" {
         p = "/index.html"
     }
-    clean := filepath.Clean(p)
-    full := filepath.Join(a.publicDir, clean)
-    if !strings.HasPrefix(full, a.publicDir) {
-        http.Error(w, "Forbidden", 403)
-        return
+    clean := strings.TrimPrefix(path.Clean(p), "/")
+    var (
+        b   []byte
+        err error
+    )
+    if a.staticFS != nil {
+        b, err = fs.ReadFile(a.staticFS, clean)
+    } else {
+        full := filepath.Join(a.publicDir, filepath.FromSlash(clean))
+        if !strings.HasPrefix(full, a.publicDir) {
+            http.Error(w, "Forbidden", 403)
+            return
+        }
+        b, err = os.ReadFile(full)
     }
-    b, err := os.ReadFile(full)
     if err != nil {
         http.NotFound(w, r)
         return
     }
     ct := "text/plain; charset=utf-8"
-    switch filepath.Ext(full) {
+    switch filepath.Ext(clean) {
     case ".html":
         ct = "text/html; charset=utf-8"
     case ".css":

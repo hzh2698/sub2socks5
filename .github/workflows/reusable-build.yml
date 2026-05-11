@@ -7,6 +7,10 @@ on:
         required: false
         type: boolean
         default: false
+      run_smoke_test:
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   build:
@@ -18,26 +22,38 @@ jobs:
         include:
           - runner: ubuntu-latest
             target_name: linux-x64
+            goos: linux
+            goarch: amd64
             binary_name: sub2socks5-linux-x64
             archive_name: sub2socks5-linux-x64.zip
           - runner: ubuntu-24.04-arm
             target_name: linux-arm64
+            goos: linux
+            goarch: arm64
             binary_name: sub2socks5-linux-arm64
             archive_name: sub2socks5-linux-arm64.zip
           - runner: windows-latest
             target_name: windows-x64
+            goos: windows
+            goarch: amd64
             binary_name: sub2socks5-windows-x64.exe
             archive_name: sub2socks5-windows-x64.zip
           - runner: windows-11-arm
             target_name: windows-arm64
+            goos: windows
+            goarch: arm64
             binary_name: sub2socks5-windows-arm64.exe
             archive_name: sub2socks5-windows-arm64.zip
           - runner: macos-15-intel
             target_name: macos-x64
+            goos: darwin
+            goarch: amd64
             binary_name: sub2socks5-macos-x64
             archive_name: sub2socks5-macos-x64.zip
           - runner: macos-latest
             target_name: macos-arm64
+            goos: darwin
+            goarch: arm64
             binary_name: sub2socks5-macos-arm64
             archive_name: sub2socks5-macos-arm64.zip
 
@@ -45,19 +61,50 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          node-version: 24
-          cache: npm
+          go-version-file: go.mod
+          cache: true
 
-      - name: Install dependencies
-        run: npm install
+      - name: Prepare output directory
+        shell: bash
+        run: mkdir -p dist
 
-      - name: Build SEA binary
+      - name: Build binary
         env:
-          SUB2SOCKS5_OUTPUT_NAME: ${{ matrix.binary_name }}
-        run: npm run build:sea
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags "-s -w" -o dist/${{ matrix.binary_name }} .
+
+      - name: Smoke test embedded static (Windows)
+        if: inputs.run_smoke_test && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist/${{ matrix.binary_name }}" -PassThru
+          Start-Sleep -Seconds 2
+          try {
+            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:18080/" -UseBasicParsing -TimeoutSec 10
+            if ($resp.StatusCode -ne 200) {
+              throw "Unexpected status code: $($resp.StatusCode)"
+            }
+          } finally {
+            if ($p -and !$p.HasExited) {
+              Stop-Process -Id $p.Id -Force
+            }
+          }
+
+      - name: Smoke test embedded static (Linux/macOS)
+        if: inputs.run_smoke_test && runner.os != 'Windows'
+        shell: bash
+        run: |
+          chmod +x "dist/${{ matrix.binary_name }}"
+          "dist/${{ matrix.binary_name }}" >/tmp/sub2socks5.log 2>&1 &
+          APP_PID=$!
+          sleep 2
+          curl -fsS "http://127.0.0.1:18080/" >/dev/null
+          kill "$APP_PID" || true
 
       - name: Package artifact (Windows)
         if: inputs.package_zip && runner.os == 'Windows'
