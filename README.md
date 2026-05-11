@@ -1,6 +1,6 @@
-﻿# sub2socks5
+# sub2socks5
 
-一个基于 `Node.js + sing-box` 的本地代理管理器，用于把机场订阅、手动节点和节点组组织成可视化、可多端口分流的 `SOCKS5` 代理服务。
+一个基于 `Go + sing-box` 的本地代理管理器，用于把机场订阅、手动节点和节点组组织成可视化、可多端口分流的 `SOCKS5` 代理服务。
 
 ## 当前能力
 
@@ -46,51 +46,41 @@
 
 ## 项目结构
 
-- `D:\sub2socks5\src\server.js`
+- `D:\sub2socks5\main.go`
+  - 程序入口
+  - 嵌入 `internal/public` 静态资源并启动应用
+- `D:\sub2socks5\internal\app\app.go`
   - HTTP 服务入口
   - 提供 Web UI 与后端 API
-- `D:\sub2socks5\src\lib\subscription.js`
-  - 订阅拉取与节点解析
-  - 手动节点原始输入解析
-  - 多订阅合并与去重
-- `D:\sub2socks5\src\lib\singbox-config.js`
-  - 业务配置转换为 `sing-box` 配置
-  - 多出口 DNS server 生成
-- `D:\sub2socks5\src\lib\singbox-manager.js`
-  - `sing-box` 进程控制
-- `D:\sub2socks5\src\lib\singbox-release.js`
-  - release 获取、版本筛选、下载
-- `D:\sub2socks5\src\lib\storage.js`
-  - 默认配置与持久化
-  - 旧配置兼容迁移
-- `D:\sub2socks5\src\public\index.html`
+  - 配置管理、订阅解析、运行时控制、内核下载管理
+- `D:\sub2socks5\internal\public\index.html`
   - 主页
-- `D:\sub2socks5\src\public\app.js`
+- `D:\sub2socks5\internal\public\app.js`
   - 主页交互逻辑
-- `D:\sub2socks5\src\public\nodes.html`
+- `D:\sub2socks5\internal\public\nodes.html`
   - 节点管理页
-- `D:\sub2socks5\src\public\nodes.js`
+- `D:\sub2socks5\internal\public\nodes.js`
   - 节点管理逻辑
-- `D:\sub2socks5\src\public\style.css`
+- `D:\sub2socks5\internal\public\style.css`
   - 页面样式
 
 ### 持久化目录
 
-- `D:\sub2socks5\src\data`
+- `D:\sub2socks5\internal\data`
   - 业务配置
   - 订阅状态
   - 架构信息
   - 版本列表缓存
   - 计划下载版本
-- `D:\sub2socks5\src\runtime`
+- `D:\sub2socks5\internal\runtime`
   - 生成后的 `sing-box.json`
-- `D:\sub2socks5\src\bin`
+- `D:\sub2socks5\internal\bin`
   - 已安装的 `sing-box` 内核
 
 ## 工作流程
 
 1. 启动 Web UI
-   - `node src/server.js`
+   - `go run .`
 2. 在主页保存基础配置
 3. 更新订阅，或在节点管理页导入手动节点
 4. 配置节点组与多个本地 `SOCKS5` 服务
@@ -400,36 +390,30 @@ curl.exe --socks5-hostname 127.0.0.1:53456 --max-time 25 https://www.gstatic.com
 
 ## 打包方法
 
-当前项目支持使用 Node.js SEA（Single Executable Applications）打包为 Windows 单文件可执行程序。
+当前项目使用 Go 原生构建产出单文件可执行程序，程序逻辑与 `internal/public` 静态资源会一起打包进二进制。
 
 ### 前置要求
 
-- 已安装 Node.js 24.x
+- 已安装 Go 1.23+
 - 在项目根目录执行命令
 
-### 安装依赖
+### 构建 Windows 可执行文件
 
 ```powershell
-npm install
-```
-
-### 构建 SEA 可执行文件
-
-```powershell
-npm run build:sea
+go build -trimpath -ldflags "-s -w" -o dist/sub2socks5-windows-x64.exe .
 ```
 
 ### 输出文件
 
 构建完成后会生成：
 
-- `D:\sub2socks5\dist\sub2socks5-sea.exe`
+- `D:\sub2socks5\dist\sub2socks5-windows-x64.exe`
 
 ### 运行方式
 
 ```powershell
 cd D:\sub2socks5\dist
-.\sub2socks5-sea.exe
+.\sub2socks5-windows-x64.exe
 ```
 
 默认 Web UI 地址：
@@ -441,16 +425,15 @@ http://127.0.0.1:18080
 ### 首次运行行为
 
 - 如果不存在配置文件，程序会自动生成默认配置
-- 源码运行 `server.js` 时，运行目录使用 `src` 目录
-- 打包后运行可执行文件时，运行目录使用 exe 所在目录
+- 运行目录为可执行文件所在目录
 - 默认会创建或使用以下子目录：
-  - `data`
-  - `runtime`
-  - `bin`
+  - `internal/data`
+  - `internal/runtime`
+  - `internal/bin`
 
 ### 打包说明
 
-- 当前 SEA 包只嵌入业务代码和 `src/public` 下的静态资源
+- 可执行文件会包含全部 Go 业务逻辑和 `internal/public` 静态资源
 - `sing-box` 内核不会嵌入到 exe 中
 - 首次运行后，用户可以通过 Web UI 按系统架构下载对应的 `sing-box` 内核
 - 因此发布时通常只需要提供：
@@ -459,8 +442,8 @@ http://127.0.0.1:18080
 
 ### 注意事项
 
-- SEA 注入后可能出现 `signature seems corrupted` 提示，这是 Node 可执行文件注入应用 blob 后的常见现象
-- 这不代表构建失败；如果要正式分发，建议重新进行代码签名
+- 用户配置与运行时状态不会嵌入二进制，仍保存在 `internal/data` 和 `internal/runtime`
+- 如用于正式分发，建议对可执行文件进行代码签名
 
 ## GitHub Actions
 
@@ -471,6 +454,7 @@ http://127.0.0.1:18080
 - `D:\sub2socks5\.github\workflows\reusable-build.yml`
   - 可复用构建模板
   - 统一维护平台与架构矩阵
+  - 内置可选 smoke test，用于验证首页 `http://127.0.0.1:18080/` 可访问
 - `D:\sub2socks5\.github\workflows\build.yml`
   - 手动触发
   - 只构建，不发布
@@ -522,7 +506,7 @@ http://127.0.0.1:18080
 2. 选择 `Release`
 3. 点击 `Run workflow`
 4. 填写：
-   - `release_tag`
+   - `release_tag_prefix`
    - `release_name`
 
 `Release` 工作流会：
@@ -538,7 +522,4 @@ http://127.0.0.1:18080
 - `Build` 适合日常验证构建是否正常
 - `Release` 适合正式生成发布附件
 - 如果后续要增减平台或架构，只需要修改 `D:\sub2socks5\.github\workflows\reusable-build.yml`
-- 当前 SEA 运行入口仍使用 `CommonJS` 方式封装启动，这是 Node SEA 当前运行限制决定的
-- 当前路径规则为：
-  - 源码运行时使用 `server.js` 所在的 `src` 目录
-  - 打包运行时使用可执行文件所在目录
+- 当前构建为 Go 单文件模式，`internal/public` 通过 `embed` 打包进二进制

@@ -561,76 +561,60 @@
 
 ---
 
-## 15. SEA 打包信息
+## 15. Go 单文件打包信息
 
-当前项目支持使用 Node.js SEA（Single Executable Applications）打包为 Windows 单文件可执行程序。
+当前项目已改为 Go 原生单文件构建，不再使用 Node.js SEA。
 
 ### 前置要求
 
-- Node.js 24.x
-- 在项目根目录执行打包命令
-
-### 安装依赖
-
-```powershell
-npm install
-```
+- Go 1.23+
+- 在项目根目录执行构建命令
 
 ### 构建命令
 
 ```powershell
-npm run build:sea
+go build -trimpath -ldflags "-s -w" -o dist/sub2socks5-windows-x64.exe .
 ```
 
 ### 输出位置
 
-- `D:\sub2socks5\dist\sub2socks5-sea.exe`
+- `D:\sub2socks5\dist\sub2socks5-windows-x64.exe`
 
-### 当前 SEA 打包链路
+### 当前单文件打包链路
 
 当前流程涉及以下文件：
 
-- `scripts/build-sea.mjs`
-  - 负责收集静态资源、生成 SEA blob，并向 `node.exe` 注入 blob
-- `scripts/sea-entry.cjs`
-  - 作为 SEA 的 CommonJS 启动封装入口
-  - 在 CJS 环境中通过动态 `import()` 启动真正的 ESM 服务端逻辑
-- `src/server.js`
-  - 已改为可复用的 `startServer()` 启动形式
-- `src/lib/storage.js`
-  - 已兼容源码模式与 SEA 模式下的运行目录解析
+- `main.go`
+  - 程序入口
+  - 通过 `embed` 将 `internal/public/*` 打包进可执行文件
+  - 把嵌入静态文件系统传给应用层
+- `internal/app/app.go`
+  - 提供 `RunWithStaticFS()` 启动入口
+  - 静态资源优先从嵌入 FS 读取
+  - 无嵌入时可回退到本地目录读取，方便开发调试
 
-### SEA 模式运行特征
+### 运行特征
 
-- 可执行文件只内嵌：
-  - Node.js 应用代码
-  - `src/public` 下的静态资源
+- 可执行文件内嵌：
+  - Go 业务逻辑
+  - `internal/public` 静态资源
 - `sing-box` 内核不会嵌入 exe
-- 首次运行时如果缺少配置文件，会自动生成默认配置
-- 可执行文件运行后会在同级目录创建或使用：
-  - `data`
-  - `runtime`
-  - `bin`
-- 源码运行 `server.js` 时，运行目录固定为 `src` 目录
+- 用户配置与运行时状态不会嵌入二进制，仍持久化到：
+  - `internal/data`
+  - `internal/runtime`
+  - `internal/bin`
 
 ### 已处理的问题
 
-- 首次运行缺少配置文件时自动生成默认配置
-- 修复 SEA 模式下误把新建的 `data/runtime/bin` 当作旧目录迁移的问题
-- 保持 SEA 入口为 CJS 封装，以兼容 Node SEA 当前仅支持 CommonJS 嵌入入口的限制
-- 移除 `storage.js` 对 `import.meta` 的路径依赖
-- 统一路径语义为：
-  - 源码模式使用 `src` 目录
-  - SEA 模式使用 exe 同级目录
+- 修复 Windows 下静态资源路径清理导致嵌入文件读取失败的问题
+  - 原因：`filepath.Clean` 在 Windows 使用反斜杠，不符合 `embed` FS 路径语义
+  - 方案：静态 URL 路径改用 `path.Clean`
+  - 验证：访问 `http://127.0.0.1:18080/` 返回 200
 
 ### 当前注意事项
 
-- 构建后可能出现 `signature seems corrupted` 提示
-  - 这是将应用 blob 注入 `node.exe` 后的常见现象
-  - 不代表构建失败
-  - 如果用于正式分发，建议重新进行代码签名
-- Node SEA 当前运行入口仍受 CommonJS 限制
-- `src/server.js` 与业务代码主体仍可继续保持 ESM 结构
+- 若只拷贝 exe 运行，首次启动会自动创建 `internal/data`、`internal/runtime`、`internal/bin`
+- 如果用于正式分发，建议进行代码签名
 
 ---
 
@@ -642,8 +626,9 @@ npm run build:sea
 
 - `D:\sub2socks5\.github\workflows\reusable-build.yml`
   - 可复用构建模板
-  - 统一维护平台与架构矩阵
+  - 统一维护平台与架构矩阵（Go 交叉编译）
   - 支持按参数切换“直接上传单文件”与“先打 zip 再上传”
+  - 支持可选 smoke test，验证首页可访问
 - `D:\sub2socks5\.github\workflows\build.yml`
   - 手动触发
   - 只构建，不发布
@@ -681,7 +666,7 @@ npm run build:sea
 
 `Release` 工作流需要输入：
 
-- `release_tag`
+- `release_tag_prefix`
 - `release_name`
 
 执行流程为：
