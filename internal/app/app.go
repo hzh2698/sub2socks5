@@ -73,6 +73,14 @@ func RunWithStaticFS(staticFS fs.FS) error {
     must(os.MkdirAll(app.binDir, 0o755))
     must(app.loadOrInit())
 
+    if getBool(getMap(app.cfg, "app"), "autoStart", false) {
+        app.mu.Lock()
+        if err := app.startRuntimeLocked(); err != nil {
+            app.appendRuntimeLog("auto start failed: " + err.Error())
+        }
+        app.mu.Unlock()
+    }
+
     mux := http.NewServeMux()
     mux.HandleFunc("/api/config", app.handleConfig)
     mux.HandleFunc("/api/subscription/refresh", app.handleSubscriptionRefresh)
@@ -379,48 +387,53 @@ func (a *App) handleRuntimeStart(w http.ResponseWriter, r *http.Request) {
     }
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err := ensureNodesLoaded(a.cfg, a.subState); err != nil {
+	if err := a.startRuntimeLocked(); err != nil {
 		fail(w, 400, err.Error())
 		return
+	}
+	rt := a.runtimeInfo
+	ok(w, rt)
+}
+
+func (a *App) startRuntimeLocked() error {
+	if err := ensureNodesLoaded(a.cfg, a.subState); err != nil {
+		return err
 	}
 	generated := buildSingBoxConfig(a.cfg, a.subState)
 	cfgPath := filepath.Join(a.runtimeDir, "sing-box.json")
 	_ = writeJSON(cfgPath, generated)
-    if a.proc != nil && a.proc.Process != nil {
-        _ = a.proc.Process.Kill()
-        a.proc = nil
-    }
+	if a.proc != nil && a.proc.Process != nil {
+		_ = a.proc.Process.Kill()
+		a.proc = nil
+	}
 	bin, err := a.resolveSingBoxBinaryPathLocked()
 	if err != nil {
-		fail(w, 400, err.Error())
-		return
+		return err
 	}
 	cmd := exec.Command(bin, "run", "-c", cfgPath)
-    stdout, _ := cmd.StdoutPipe()
-    stderr, _ := cmd.StderrPipe()
+	stdout, _ := cmd.StdoutPipe()
+	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
-		fail(w, 500, err.Error())
-		return
+		return err
 	}
-    a.proc = cmd
-    a.runtimeInfo["state"] = "running"
-    a.runtimeInfo["running"] = true
-    a.appendRuntimeLog("sing-box started")
-    go a.captureLogs(stdout)
-    go a.captureLogs(stderr)
-    go func(c *exec.Cmd) {
-        _ = c.Wait()
-        a.mu.Lock()
-        if a.proc == c {
-            a.proc = nil
-            a.runtimeInfo["state"] = "stopped"
-            a.runtimeInfo["running"] = false
-            a.appendRuntimeLog("sing-box exited")
-        }
-        a.mu.Unlock()
-    }(cmd)
-	rt := a.runtimeInfo
-	ok(w, rt)
+	a.proc = cmd
+	a.runtimeInfo["state"] = "running"
+	a.runtimeInfo["running"] = true
+	a.appendRuntimeLog("sing-box started")
+	go a.captureLogs(stdout)
+	go a.captureLogs(stderr)
+	go func(c *exec.Cmd) {
+		_ = c.Wait()
+		a.mu.Lock()
+		if a.proc == c {
+			a.proc = nil
+			a.runtimeInfo["state"] = "stopped"
+			a.runtimeInfo["running"] = false
+			a.appendRuntimeLog("sing-box exited")
+		}
+		a.mu.Unlock()
+	}(cmd)
+	return nil
 }
 
 func (a *App) handleRuntimeStop(w http.ResponseWriter, r *http.Request) {
@@ -1977,6 +1990,32 @@ func getString(m map[string]any, key, def string) string {
 func getInt(m map[string]any, key string, def int) int {
     if m == nil { return def }
     v := int(toFloat(m[key])); if v == 0 { return def }; return v
+}
+func getBool(m map[string]any, key string, def bool) bool {
+    if m == nil {
+        return def
+    }
+    v, ok := m[key]
+    if !ok || v == nil {
+        return def
+    }
+    switch t := v.(type) {
+    case bool:
+        return t
+    case string:
+        s := strings.TrimSpace(strings.ToLower(t))
+        if s == "true" || s == "1" || s == "yes" || s == "on" {
+            return true
+        }
+        if s == "false" || s == "0" || s == "no" || s == "off" {
+            return false
+        }
+    case float64:
+        return t != 0
+    case int:
+        return t != 0
+    }
+    return def
 }
 func toFloat(v any) float64 {
     switch t := v.(type) {
