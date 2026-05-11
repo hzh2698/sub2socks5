@@ -1,0 +1,1999 @@
+package app
+
+import (
+    "archive/tar"
+    "archive/zip"
+    "compress/gzip"
+    "bytes"
+    "encoding/base64"
+    "encoding/json"
+    "errors"
+    "fmt"
+    "io"
+    "net"
+    "net/http"
+    "net/url"
+    "os"
+    "os/exec"
+    "path/filepath"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"regexp"
+	"reflect"
+)
+
+type App struct {
+    mu          sync.RWMutex
+    cfg         map[string]any
+    subState    map[string]any
+    runtimeInfo map[string]any
+    proc        *exec.Cmd
+    plannedKernel map[string]any
+    releaseList []any
+    downloadState map[string]any
+    rootDir     string
+    dataDir     string
+    runtimeDir  string
+    binDir      string
+    publicDir   string
+}
+
+func Run() error {
+    cwd, err := os.Getwd()
+    must(err)
+	app := &App{
+		rootDir:    cwd,
+		dataDir:    filepath.Join(cwd, "internal", "data"),
+		runtimeDir: filepath.Join(cwd, "internal", "runtime"),
+		binDir:     filepath.Join(cwd, "internal", "bin"),
+		publicDir:  filepath.Join(cwd, "internal", "public"),
+        runtimeInfo: map[string]any{
+            "state":   "stopped",
+            "running": false,
+            "logs":    []string{},
+        },
+        plannedKernel: nil,
+        releaseList:   []any{},
+        downloadState: map[string]any{"active": false, "steps": []any{}, "progress": nil, "updatedAt": nil},
+    }
+    must(os.MkdirAll(app.dataDir, 0o755))
+    must(os.MkdirAll(app.runtimeDir, 0o755))
+    must(os.MkdirAll(app.binDir, 0o755))
+    must(app.loadOrInit())
+
+    mux := http.NewServeMux()
+    mux.HandleFunc("/api/config", app.handleConfig)
+    mux.HandleFunc("/api/subscription/refresh", app.handleSubscriptionRefresh)
+    mux.HandleFunc("/api/nodes", app.handleNodes)
+    mux.HandleFunc("/api/nodes/import", app.handleNodeImport)
+    mux.HandleFunc("/api/nodes/check", app.handleNodesCheck)
+    mux.HandleFunc("/api/ports/next", app.handleNextPort)
+    mux.HandleFunc("/api/runtime/generate", app.handleRuntimeGenerate)
+    mux.HandleFunc("/api/runtime/start", app.handleRuntimeStart)
+    mux.HandleFunc("/api/runtime/stop", app.handleRuntimeStop)
+    mux.HandleFunc("/api/runtime/logs", app.handleRuntimeLogs)
+    mux.HandleFunc("/api/runtime/generated", app.handleRuntimeGenerated)
+    mux.HandleFunc("/api/kernel/architecture", app.handleKernelArch)
+    mux.HandleFunc("/api/kernel/status", app.handleKernelStatus)
+    mux.HandleFunc("/api/kernel/releases", app.handleKernelReleases)
+    mux.HandleFunc("/api/kernel/releases/update", app.handleKernelReleasesUpdate)
+    mux.HandleFunc("/api/kernel/plan", app.handleKernelPlan)
+    mux.HandleFunc("/api/kernel/download", app.handleKernelDownload)
+    mux.HandleFunc("/", app.handleStatic)
+
+    host := getString(getMap(app.cfg, "app"), "host", "0.0.0.0")
+    port := getInt(getMap(app.cfg, "app"), "port", 18080)
+    addr := fmt.Sprintf("%s:%d", host, port)
+    fmt.Printf("Web UI listening on http://%s\n", addr)
+    return http.ListenAndServe(addr, withCORS(mux))
+}
+
+func (a *App) loadOrInit() error {
+    cfgPath := filepath.Join(a.dataDir, "app-config.json")
+    subPath := filepath.Join(a.dataDir, "subscription-state.json")
+    archPath := filepath.Join(a.dataDir, "architecture-info.json")
+    plannedPath := filepath.Join(a.dataDir, "planned-kernel-info.json")
+    releasePath := filepath.Join(a.dataDir, "release-list.json")
+    generatedPath := filepath.Join(a.runtimeDir, "sing-box.json")
+
+    if _, err := os.Stat(cfgPath); errors.Is(err, os.ErrNotExist) {
+        a.cfg = defaultConfig()
+        if err := writeJSON(cfgPath, a.cfg); err != nil {
+            return err
+        }
+    } else {
+        var cfg map[string]any
+        if err := readJSON(cfgPath, &cfg); err != nil {
+            return err
+        }
+        a.cfg = mergeMap(defaultConfig(), cfg)
+    }
+
+    if _, err := os.Stat(subPath); errors.Is(err, os.ErrNotExist) {
+        a.subState = map[string]any{"raw": "", "nodes": []any{}, "warnings": []any{}, "updatedAt": nil}
+        if err := writeJSON(subPath, a.subState); err != nil {
+            return err
+        }
+    } else {
+        var st map[string]any
+        if err := readJSON(subPath, &st); err != nil {
+            return err
+        }
+        a.subState = st
+    }
+
+    if _, err := os.Stat(archPath); errors.Is(err, os.ErrNotExist) {
+        if err := writeJSON(archPath, detectPlatform()); err != nil {
+            return err
+        }
+    }
+
+    if _, err := os.Stat(plannedPath); errors.Is(err, os.ErrNotExist) {
+        if err := writeJSON(plannedPath, nil); err != nil {
+            return err
+        }
+    } else {
+        var planned map[string]any
+        if err := readJSON(plannedPath, &planned); err == nil {
+            a.plannedKernel = planned
+        }
+    }
+
+    if _, err := os.Stat(releasePath); errors.Is(err, os.ErrNotExist) {
+        if err := writeJSON(releasePath, []any{}); err != nil {
+            return err
+        }
+    } else {
+        var releases []any
+        if err := readJSON(releasePath, &releases); err == nil {
+            a.releaseList = releases
+        }
+    }
+
+    if _, err := os.Stat(generatedPath); errors.Is(err, os.ErrNotExist) {
+        generated := buildSingBoxConfig(a.cfg, a.subState)
+        if err := writeJSON(generatedPath, generated); err != nil {
+            return err
+        }
+    }
+
+    return nil
+}
+
+func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
+    switch r.Method {
+    case http.MethodGet:
+        a.mu.RLock()
+        defer a.mu.RUnlock()
+        ok(w, map[string]any{
+            "config":            a.cfg,
+            "subscription":      a.subState,
+            "availableOutbounds": collectOutbounds(a.cfg, a.subState),
+            "runtime":           a.runtimeInfo,
+            "kernel":            a.kernelStatus(),
+            "architecture":      detectPlatform(),
+            "plannedKernel":     a.plannedKernel,
+            "releaseList":       a.releaseList,
+            "download":          a.downloadState,
+        })
+    case http.MethodPost:
+        var body map[string]any
+        if err := decodeJSON(r.Body, &body); err != nil {
+            fail(w, 400, err.Error())
+            return
+        }
+        a.mu.Lock()
+        a.cfg = body
+        _ = writeJSON(filepath.Join(a.dataDir, "app-config.json"), a.cfg)
+        generated := buildSingBoxConfig(a.cfg, a.subState)
+        _ = writeJSON(filepath.Join(a.runtimeDir, "sing-box.json"), generated)
+        runtimeState := a.runtimeInfo
+        a.mu.Unlock()
+        ok(w, map[string]any{"ok": true, "generated": generated, "runtime": runtimeState})
+    default:
+        methodNotAllowed(w, "GET, POST")
+    }
+}
+
+func (a *App) handleSubscriptionRefresh(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        methodNotAllowed(w, "POST")
+        return
+    }
+    a.mu.Lock()
+    defer a.mu.Unlock()
+    subCfg := getMap(a.cfg, "subscription")
+    st := fetchSubscription(subCfg)
+    st["updatedAt"] = time.Now().Format(time.RFC3339)
+    a.subState = st
+    _ = writeJSON(filepath.Join(a.dataDir, "subscription-state.json"), st)
+    ok(w, st)
+}
+
+func (a *App) handleNodes(w http.ResponseWriter, r *http.Request) {
+    switch r.Method {
+	case http.MethodGet:
+		a.mu.RLock()
+		defer a.mu.RUnlock()
+		nr := getMap(a.cfg, "nodeRegistry")
+		disabled := toStringSet(getSlice(nr, "disabledSubscriptionTags"))
+		nodes := []any{}
+		for _, n := range getSlice(a.subState, "nodes") {
+			m, okk := n.(map[string]any)
+			if !okk || disabled[mustStr(m["tag"])] {
+                continue
+            }
+            nodes = append(nodes, m)
+        }
+        ok(w, map[string]any{
+            "subscriptionNodes":       nodes,
+            "disabledSubscriptionTags": getSlice(nr, "disabledSubscriptionTags"),
+            "manualNodes":             getSlice(nr, "manualNodes"),
+            "groups":                  getSlice(nr, "groups"),
+            "chains":                  getSlice(nr, "chains"),
+            "availableOutbounds":      collectOutbounds(a.cfg, a.subState),
+            "fallbackStates":           map[string]any{},
+        })
+    case http.MethodPost:
+        var body map[string]any
+        if err := decodeJSON(r.Body, &body); err != nil {
+            fail(w, 400, err.Error())
+            return
+        }
+        a.mu.Lock()
+        nr := getMap(a.cfg, "nodeRegistry")
+        nr["manualNodes"] = getSlice(body, "manualNodes")
+        nr["groups"] = getSlice(body, "groups")
+        nr["chains"] = getSlice(body, "chains")
+        nr["disabledSubscriptionTags"] = getSlice(body, "disabledSubscriptionTags")
+        a.cfg["nodeRegistry"] = nr
+        _ = writeJSON(filepath.Join(a.dataDir, "app-config.json"), a.cfg)
+        outbounds := collectOutbounds(a.cfg, a.subState)
+        a.mu.Unlock()
+        ok(w, map[string]any{"ok": true, "manualNodes": nr["manualNodes"], "groups": nr["groups"], "chains": nr["chains"], "availableOutbounds": outbounds})
+    default:
+        methodNotAllowed(w, "GET, POST")
+    }
+}
+
+func (a *App) handleNodeImport(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        methodNotAllowed(w, "POST")
+        return
+    }
+    var body map[string]any
+    if err := decodeJSON(r.Body, &body); err != nil {
+        fail(w, 400, err.Error())
+        return
+    }
+    res := parseManualNodeInput(mustStr(body["raw"]))
+    ok(w, res)
+}
+
+func (a *App) handleNodesCheck(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        methodNotAllowed(w, "POST")
+        return
+    }
+    var body map[string]any
+    if err := decodeJSON(r.Body, &body); err != nil {
+        fail(w, 400, err.Error())
+        return
+    }
+    tags := []string{}
+    for _, t := range getSlice(body, "tags") {
+        s := strings.TrimSpace(mustStr(t))
+        if s != "" {
+            tags = append(tags, s)
+        }
+    }
+    if len(tags) == 0 {
+        fail(w, 400, "Missing node tags for check")
+        return
+    }
+    urlToTest := mustStr(body["url"])
+    if urlToTest == "" {
+        urlToTest = "https://www.gstatic.com/generate_204"
+    }
+    timeout := int(toFloat(body["timeoutMs"]))
+    if timeout <= 0 {
+        timeout = 5000
+    }
+	results := map[string]any{}
+	nodeReg := getMap(a.cfg, "nodeRegistry")
+	chains := getSlice(nodeReg, "chains")
+	for _, tag := range tags {
+		targetTag := tag
+		for _, c := range chains {
+			cm, ok := c.(map[string]any)
+			if !ok || strings.TrimSpace(mustStr(cm["tag"])) != tag {
+				continue
+			}
+			members := getSlice(cm, "members")
+			if len(members) > 0 {
+				targetTag = strings.TrimSpace(mustStr(members[len(members)-1]))
+			}
+			break
+		}
+		delay, err := measureProxyDelay(targetTag, urlToTest, timeout)
+		if err != nil {
+			results[tag] = map[string]any{"ok": false, "text": "失败", "error": err.Error(), "checkedAt": time.Now().Format(time.RFC3339), "checkedTag": targetTag}
+			continue
+		}
+		results[tag] = map[string]any{"ok": true, "delay": delay, "text": fmt.Sprintf("%d ms", delay), "checkedAt": time.Now().Format(time.RFC3339), "checkedTag": targetTag}
+	}
+    ok(w, map[string]any{"ok": true, "url": urlToTest, "timeoutMs": timeout, "results": results})
+}
+
+func (a *App) handleNextPort(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        methodNotAllowed(w, "POST")
+        return
+    }
+    var body map[string]any
+    if err := decodeJSON(r.Body, &body); err != nil {
+        fail(w, 400, err.Error())
+        return
+    }
+    host := mustStr(body["host"])
+    if host == "" {
+        host = "127.0.0.1"
+    }
+    start := int(toFloat(body["start"]))
+    if start <= 0 {
+        fail(w, 400, "Invalid start port")
+        return
+    }
+    p := findPort(host, start)
+    ok(w, map[string]any{"host": host, "port": p})
+}
+
+func (a *App) handleRuntimeGenerate(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        methodNotAllowed(w, "POST")
+        return
+    }
+    a.mu.RLock()
+    generated := buildSingBoxConfig(a.cfg, a.subState)
+    a.mu.RUnlock()
+    _ = writeJSON(filepath.Join(a.runtimeDir, "sing-box.json"), generated)
+	ok(w, map[string]any{"ok": true, "path": filepath.Join("internal", "runtime", "sing-box.json"), "generated": generated})
+}
+
+func (a *App) handleRuntimeStart(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        methodNotAllowed(w, "POST")
+        return
+    }
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := ensureNodesLoaded(a.cfg, a.subState); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	generated := buildSingBoxConfig(a.cfg, a.subState)
+	cfgPath := filepath.Join(a.runtimeDir, "sing-box.json")
+	_ = writeJSON(cfgPath, generated)
+    if a.proc != nil && a.proc.Process != nil {
+        _ = a.proc.Process.Kill()
+        a.proc = nil
+    }
+	bin, err := a.resolveSingBoxBinaryPathLocked()
+	if err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	cmd := exec.Command(bin, "run", "-c", cfgPath)
+    stdout, _ := cmd.StdoutPipe()
+    stderr, _ := cmd.StderrPipe()
+	if err := cmd.Start(); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+    a.proc = cmd
+    a.runtimeInfo["state"] = "running"
+    a.runtimeInfo["running"] = true
+    a.appendRuntimeLog("sing-box started")
+    go a.captureLogs(stdout)
+    go a.captureLogs(stderr)
+    go func(c *exec.Cmd) {
+        _ = c.Wait()
+        a.mu.Lock()
+        if a.proc == c {
+            a.proc = nil
+            a.runtimeInfo["state"] = "stopped"
+            a.runtimeInfo["running"] = false
+            a.appendRuntimeLog("sing-box exited")
+        }
+        a.mu.Unlock()
+    }(cmd)
+	rt := a.runtimeInfo
+	ok(w, rt)
+}
+
+func (a *App) handleRuntimeStop(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        methodNotAllowed(w, "POST")
+        return
+    }
+    a.mu.Lock()
+    if a.proc != nil && a.proc.Process != nil {
+        _ = a.proc.Process.Kill()
+        a.proc = nil
+    }
+    a.runtimeInfo["state"] = "stopped"
+    a.runtimeInfo["running"] = false
+    a.appendRuntimeLog("runtime stop requested")
+    rt := a.runtimeInfo
+    a.mu.Unlock()
+    ok(w, rt)
+}
+
+func (a *App) handleRuntimeLogs(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodGet {
+        methodNotAllowed(w, "GET")
+        return
+    }
+    a.mu.RLock()
+    defer a.mu.RUnlock()
+    ok(w, a.runtimeInfo)
+}
+
+func (a *App) handleRuntimeGenerated(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodGet {
+        methodNotAllowed(w, "GET")
+        return
+    }
+    p := filepath.Join(a.runtimeDir, "sing-box.json")
+    b, err := os.ReadFile(p)
+    if err != nil {
+        ok(w, map[string]any{})
+        return
+    }
+    var v any
+    if json.Unmarshal(b, &v) != nil {
+        ok(w, map[string]any{})
+        return
+    }
+    ok(w, v)
+}
+
+func (a *App) handleKernelArch(w http.ResponseWriter, r *http.Request) {
+    switch r.Method {
+    case http.MethodGet, http.MethodPost:
+        arch := detectPlatform()
+        _ = writeJSON(filepath.Join(a.dataDir, "architecture-info.json"), arch)
+        if r.Method == http.MethodPost {
+            if latest, err := getLatestRelease(arch); err == nil {
+                a.mu.Lock()
+                a.plannedKernel = latest
+                _ = writeJSON(filepath.Join(a.dataDir, "planned-kernel-info.json"), latest)
+                a.mu.Unlock()
+            }
+        }
+        a.mu.RLock()
+        planned := a.plannedKernel
+        a.mu.RUnlock()
+        ok(w, map[string]any{"architecture": arch, "stored": true, "plannedKernel": planned, "kernel": a.kernelStatus()})
+    default:
+        methodNotAllowed(w, "GET, POST")
+    }
+}
+
+func (a *App) handleKernelStatus(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodGet {
+        methodNotAllowed(w, "GET")
+        return
+    }
+    ok(w, a.kernelStatus())
+}
+
+func (a *App) handleKernelReleases(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, "GET")
+		return
+	}
+	a.mu.RLock()
+	if len(a.releaseList) > 0 {
+		cached := a.releaseList
+		a.mu.RUnlock()
+		ok(w, cached)
+		return
+	}
+	a.mu.RUnlock()
+	releases, err := listReleases(detectPlatform())
+	if err != nil {
+		a.mu.RLock()
+		cached := a.releaseList
+		a.mu.RUnlock()
+		ok(w, cached)
+		return
+	}
+    a.mu.Lock()
+    a.releaseList = releases
+    _ = writeJSON(filepath.Join(a.dataDir, "release-list.json"), releases)
+    a.mu.Unlock()
+    ok(w, releases)
+}
+
+func (a *App) handleKernelReleasesUpdate(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        methodNotAllowed(w, "POST")
+        return
+    }
+    releases, err := listReleases(detectPlatform())
+    if err != nil {
+        fail(w, 500, err.Error())
+        return
+    }
+    a.mu.Lock()
+    a.releaseList = releases
+    _ = writeJSON(filepath.Join(a.dataDir, "release-list.json"), releases)
+    if len(releases) > 0 {
+        if p, okk := releases[0].(map[string]any); okk {
+            a.plannedKernel = p
+            _ = writeJSON(filepath.Join(a.dataDir, "planned-kernel-info.json"), p)
+        }
+    }
+    planned := a.plannedKernel
+    a.mu.Unlock()
+    ok(w, map[string]any{"releaseList": releases, "plannedKernel": planned})
+}
+
+func (a *App) handleKernelPlan(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        methodNotAllowed(w, "POST")
+        return
+    }
+    var body map[string]any
+    _ = decodeJSON(r.Body, &body)
+    version := mustStr(body["version"])
+    a.mu.Lock()
+    defer a.mu.Unlock()
+    for _, item := range a.releaseList {
+        m, okk := item.(map[string]any)
+        if okk && mustStr(m["version"]) == version {
+            a.plannedKernel = m
+            _ = writeJSON(filepath.Join(a.dataDir, "planned-kernel-info.json"), m)
+            ok(w, m)
+            return
+        }
+    }
+    fail(w, 404, "Requested kernel version not found")
+}
+
+func (a *App) handleKernelDownload(w http.ResponseWriter, r *http.Request) {
+    switch r.Method {
+    case http.MethodGet:
+        a.mu.RLock()
+        st := a.downloadState
+        a.mu.RUnlock()
+        ok(w, st)
+	case http.MethodPost:
+		a.mu.Lock()
+		planned := a.plannedKernel
+		a.downloadState = map[string]any{"active": true, "steps": []any{}, "progress": map[string]any{"percent": 0, "stage": "prepare", "message": "preparing"}, "updatedAt": time.Now().Format(time.RFC3339)}
+		a.pushDownloadStepLocked("prepare", "Prepared download workspace", map[string]any{})
+		a.mu.Unlock()
+        if planned == nil {
+            fail(w, 400, "No planned kernel selected")
+            return
+        }
+        result, err := a.downloadKernel(planned)
+        if err != nil {
+            a.mu.Lock()
+            a.downloadState = map[string]any{"active": false, "steps": []any{map[string]any{"stage": "error", "message": err.Error()}}, "progress": map[string]any{"percent": nil, "stage": "error", "message": err.Error()}, "updatedAt": time.Now().Format(time.RFC3339)}
+            ds := a.downloadState
+            a.mu.Unlock()
+            fail(w, 500, err.Error())
+            _ = ds
+            return
+        }
+        a.mu.Lock()
+        a.downloadState = map[string]any{"active": false, "steps": []any{map[string]any{"stage": "done", "message": "Kernel installation completed"}}, "progress": map[string]any{"percent": 100, "stage": "done", "message": "Kernel installation completed"}, "updatedAt": time.Now().Format(time.RFC3339)}
+        ds := a.downloadState
+        a.mu.Unlock()
+        ok(w, map[string]any{"result": result, "kernel": a.kernelStatus(), "download": ds})
+    default:
+        methodNotAllowed(w, "GET, POST")
+    }
+}
+
+func (a *App) handleStatic(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodGet && r.Method != http.MethodHead {
+        methodNotAllowed(w, "GET, HEAD")
+        return
+    }
+    p := r.URL.Path
+    if strings.HasPrefix(p, "/api/") {
+        fail(w, 404, "API route not found")
+        return
+    }
+    if p == "/" {
+        p = "/index.html"
+    }
+    clean := filepath.Clean(p)
+    full := filepath.Join(a.publicDir, clean)
+    if !strings.HasPrefix(full, a.publicDir) {
+        http.Error(w, "Forbidden", 403)
+        return
+    }
+    b, err := os.ReadFile(full)
+    if err != nil {
+        http.NotFound(w, r)
+        return
+    }
+    ct := "text/plain; charset=utf-8"
+    switch filepath.Ext(full) {
+    case ".html":
+        ct = "text/html; charset=utf-8"
+    case ".css":
+        ct = "text/css; charset=utf-8"
+    case ".js":
+        ct = "application/javascript; charset=utf-8"
+    }
+    w.Header().Set("content-type", ct)
+    _, _ = w.Write(b)
+}
+
+func (a *App) kernelStatus() map[string]any {
+    exe := "sing-box"
+    if runtime.GOOS == "windows" {
+        exe = "sing-box.exe"
+    }
+    p := filepath.Join(a.binDir, exe)
+    _, err := os.Stat(p)
+    installed := err == nil
+    var releaseInfo any = nil
+    verFile := filepath.Join(a.binDir, "sing-box-version.json")
+    if b, err := os.ReadFile(verFile); err == nil {
+        var tmp any
+        if json.Unmarshal(b, &tmp) == nil {
+            releaseInfo = tmp
+        }
+    }
+    return map[string]any{"installed": installed, "binaryPath": p, "platform": detectPlatform(), "releaseInfo": releaseInfo}
+}
+
+func (a *App) appendRuntimeLog(msg string) {
+    logs := getStringSlice(a.runtimeInfo, "logs")
+    logs = append(logs, time.Now().Format(time.RFC3339)+" "+msg)
+    if len(logs) > 1000 {
+        logs = logs[len(logs)-1000:]
+    }
+    a.runtimeInfo["logs"] = logs
+}
+
+func (a *App) captureLogs(r io.ReadCloser) {
+    defer r.Close()
+    buf := make([]byte, 4096)
+    acc := ""
+    for {
+        n, err := r.Read(buf)
+        if n > 0 {
+            acc += string(buf[:n])
+            for {
+                i := strings.IndexAny(acc, "\r\n")
+                if i < 0 {
+                    break
+                }
+                line := strings.TrimSpace(acc[:i])
+                acc = strings.TrimLeft(acc[i+1:], "\r\n")
+                if line != "" {
+                    a.mu.Lock()
+                    a.appendRuntimeLog(line)
+                    a.mu.Unlock()
+                }
+            }
+        }
+        if err != nil {
+            break
+        }
+    }
+}
+
+func resolveManagedPath(rootDir, p string) string {
+    p = strings.TrimSpace(p)
+    if p == "" {
+        return ""
+    }
+    if filepath.IsAbs(p) {
+        return p
+    }
+    return filepath.Join(rootDir, filepath.FromSlash(p))
+}
+
+func measureProxyDelay(tag, testURL string, timeoutMs int) (int, error) {
+    endpoint := fmt.Sprintf("http://127.0.0.1:19090/proxies/%s/delay?url=%s&timeout=%d", url.QueryEscape(tag), url.QueryEscape(testURL), timeoutMs)
+    client := &http.Client{Timeout: time.Duration(timeoutMs+1500) * time.Millisecond}
+    resp, err := client.Get(endpoint)
+    if err != nil {
+        return 0, fmt.Errorf("测速控制接口未就绪，请先确认 sing-box 已正常启动")
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode >= 400 {
+        return 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+    }
+    var data map[string]any
+    if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+        return 0, err
+    }
+    delay := int(toFloat(data["delay"]))
+    if delay < 0 {
+        return 0, fmt.Errorf("No delay data")
+    }
+    return delay, nil
+}
+
+func listReleases(platform map[string]any) ([]any, error) {
+	req, _ := newGitHubRequest(http.MethodGet, "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20")
+	resp, err := (&http.Client{Timeout: 25 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+    defer resp.Body.Close()
+    if resp.StatusCode >= 400 {
+        return nil, fmt.Errorf("Failed to fetch sing-box releases: HTTP %d", resp.StatusCode)
+    }
+    var raw []map[string]any
+    if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+        return nil, err
+    }
+    out := []any{}
+    suffix := mustStr(platform["assetSuffix"])
+    for _, rel := range raw {
+        assets, _ := rel["assets"].([]any)
+        asset := pickAsset(assets, suffix)
+        if asset == nil {
+            continue
+        }
+        out = append(out, map[string]any{
+            "version":     mustStr(rel["tag_name"]),
+            "publishedAt": mustStr(rel["published_at"]),
+            "assetName":   mustStr(asset["name"]),
+            "downloadUrl": mustStr(asset["browser_download_url"]),
+            "size":        int(toFloat(asset["size"])),
+            "platform":    platform,
+        })
+    }
+    return out, nil
+}
+
+func getLatestRelease(platform map[string]any) (map[string]any, error) {
+	req, _ := newGitHubRequest(http.MethodGet, "https://api.github.com/repos/SagerNet/sing-box/releases/latest")
+	resp, err := (&http.Client{Timeout: 25 * time.Second}).Do(req)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode >= 400 {
+        return nil, fmt.Errorf("Failed to fetch sing-box latest release: HTTP %d", resp.StatusCode)
+    }
+    var rel map[string]any
+    if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+        return nil, err
+    }
+    assets, _ := rel["assets"].([]any)
+    suffix := mustStr(platform["assetSuffix"])
+    asset := pickAsset(assets, suffix)
+    if asset == nil {
+        return nil, fmt.Errorf("No asset found for %s", suffix)
+    }
+    return map[string]any{
+        "version":     mustStr(rel["tag_name"]),
+        "publishedAt": mustStr(rel["published_at"]),
+        "assetName":   mustStr(asset["name"]),
+        "downloadUrl": mustStr(asset["browser_download_url"]),
+        "size":        int(toFloat(asset["size"])),
+        "platform":    platform,
+    }, nil
+}
+
+func newGitHubRequest(method, rawURL string) (*http.Request, error) {
+	req, err := http.NewRequest(method, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("user-agent", "sub2socks5-go/0.1.0")
+	req.Header.Set("accept", "application/vnd.github+json")
+	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
+		req.Header.Set("authorization", "Bearer "+token)
+	}
+	return req, nil
+}
+
+func pickAsset(assets []any, suffix string) map[string]any {
+    for _, a := range assets {
+        m, ok := a.(map[string]any)
+        if !ok {
+            continue
+        }
+        name := strings.ToLower(mustStr(m["name"]))
+        if strings.Contains(name, strings.ToLower(suffix)) && (strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.gz")) && !strings.Contains(name, "lite") {
+            if strings.Contains(name, "legacy") || strings.Contains(name, "windows-7") {
+                continue
+            }
+            return m
+        }
+    }
+    for _, a := range assets {
+        m, ok := a.(map[string]any)
+        if !ok {
+            continue
+        }
+        name := strings.ToLower(mustStr(m["name"]))
+        if strings.Contains(name, strings.ToLower(suffix)) && (strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.gz")) {
+            return m
+        }
+    }
+    return nil
+}
+
+func (a *App) downloadKernel(release map[string]any) (map[string]any, error) {
+    urlStr := mustStr(release["downloadUrl"])
+    assetName := mustStr(release["assetName"])
+    if urlStr == "" || assetName == "" {
+        return nil, fmt.Errorf("Missing release information for download")
+    }
+    tmpDir, err := os.MkdirTemp("", "sub2socks5-go-")
+    if err != nil {
+        return nil, err
+    }
+    defer os.RemoveAll(tmpDir)
+	archivePath := filepath.Join(tmpDir, assetName)
+	a.mu.Lock()
+	a.pushDownloadStepLocked("prepare", "Download workspace ready", map[string]any{"assetName": assetName})
+	a.mu.Unlock()
+	req, _ := http.NewRequest(http.MethodGet, urlStr, nil)
+	req.Header.Set("user-agent", "sub2socks5-go/0.1.0")
+	resp, err := (&http.Client{Timeout: 0}).Do(req)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode >= 400 {
+        return nil, fmt.Errorf("Failed to download sing-box: HTTP %d", resp.StatusCode)
+    }
+	f, err := os.Create(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	total := toFloat(resp.ContentLength)
+	if total <= 0 {
+		total = toFloat(release["size"])
+	}
+	buf := make([]byte, 64*1024)
+	var downloaded float64
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, wErr := f.Write(buf[:n]); wErr != nil {
+				f.Close()
+				return nil, wErr
+			}
+			downloaded += float64(n)
+			percent := any(nil)
+			if total > 0 {
+				percent = float64(int((downloaded/total)*10000)) / 100
+			}
+			a.mu.Lock()
+			a.pushDownloadStepLocked("download", "Downloading kernel archive", map[string]any{
+				"downloadedBytes": int(downloaded),
+				"totalBytes":      int(total),
+				"percent":         percent,
+				"threads":         1,
+			})
+			a.mu.Unlock()
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			f.Close()
+			return nil, readErr
+		}
+	}
+	_ = f.Close()
+	extractDir := filepath.Join(tmpDir, "extract")
+	_ = os.MkdirAll(extractDir, 0o755)
+	a.mu.Lock()
+	a.pushDownloadStepLocked("extract", "Extracting kernel archive", map[string]any{"archivePath": archivePath})
+	a.mu.Unlock()
+    if strings.HasSuffix(strings.ToLower(assetName), ".zip") {
+        if err := extractZip(archivePath, extractDir); err != nil {
+            return nil, err
+        }
+    } else if strings.HasSuffix(strings.ToLower(assetName), ".tar.gz") {
+        if err := extractTarGz(archivePath, extractDir); err != nil {
+            return nil, err
+        }
+    } else {
+        return nil, fmt.Errorf("Unsupported archive format: %s", assetName)
+    }
+    exe := mustStr(getMap(release, "platform")["executableName"])
+	binSource, err := findBinaryFile(extractDir, exe)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.pushDownloadStepLocked("search", "Locating executable file", map[string]any{"executableName": exe})
+	a.mu.Unlock()
+	binTarget := filepath.Join(a.binDir, exe)
+    b, err := os.ReadFile(binSource)
+    if err != nil {
+        return nil, err
+    }
+	if err := os.WriteFile(binTarget, b, 0o755); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.pushDownloadStepLocked("install", "Installing kernel binary", map[string]any{"binaryTarget": binTarget})
+	a.mu.Unlock()
+	_ = writeJSON(filepath.Join(a.binDir, "sing-box-version.json"), release)
+    a.mu.Lock()
+    appCfg := getMap(a.cfg, "app")
+			appCfg["singBoxBinary"] = filepath.ToSlash(filepath.Join("internal", "bin", exe))
+    a.cfg["app"] = appCfg
+    _ = writeJSON(filepath.Join(a.dataDir, "app-config.json"), a.cfg)
+	a.mu.Unlock()
+	a.mu.Lock()
+	a.pushDownloadStepLocked("done", "Kernel installation completed", map[string]any{"binaryPath": filepath.ToSlash(filepath.Join("internal", "bin", exe))})
+	a.mu.Unlock()
+	return map[string]any{"ok": true, "binaryPath": filepath.ToSlash(filepath.Join("internal", "bin", exe)), "version": release["version"], "assetName": assetName}, nil
+}
+
+func (a *App) pushDownloadStepLocked(stage, message string, details map[string]any) {
+	step := map[string]any{"stage": stage, "message": message, "details": details, "time": time.Now().Format(time.RFC3339)}
+	steps := getSlice(a.downloadState, "steps")
+	steps = append(steps, step)
+	if len(steps) > 200 {
+		steps = steps[len(steps)-200:]
+	}
+	a.downloadState["steps"] = steps
+	progress := map[string]any{
+		"percent":         details["percent"],
+		"stage":           stage,
+		"message":         message,
+		"downloadedBytes": details["downloadedBytes"],
+		"totalBytes":      details["totalBytes"],
+		"threads":         details["threads"],
+	}
+	a.downloadState["progress"] = progress
+	a.downloadState["updatedAt"] = step["time"]
+}
+
+func ensureNodesLoaded(cfg, sub map[string]any) error {
+	if len(getSlice(sub, "nodes")) == 0 && len(getSlice(getMap(cfg, "nodeRegistry"), "manualNodes")) == 0 {
+		return fmt.Errorf("没有可用节点，请先更新订阅或添加手动节点。")
+	}
+	return nil
+}
+
+func (a *App) resolveSingBoxBinaryPathLocked() (string, error) {
+	configured := resolveManagedPath(a.rootDir, getString(getMap(a.cfg, "app"), "singBoxBinary", ""))
+	if configured != "" {
+		if _, err := os.Stat(configured); err == nil {
+			return configured, nil
+		}
+	}
+	ks := a.kernelStatus()
+	installed := mustStr(ks["binaryPath"])
+	if installed != "" {
+		if _, err := os.Stat(installed); err == nil {
+			appCfg := getMap(a.cfg, "app")
+			appCfg["singBoxBinary"] = filepath.ToSlash(filepath.Join("internal", "bin", filepath.Base(installed)))
+			a.cfg["app"] = appCfg
+			_ = writeJSON(filepath.Join(a.dataDir, "app-config.json"), a.cfg)
+			a.appendRuntimeLog("sing-box binary fallback to installed path: " + installed)
+			return installed, nil
+		}
+	}
+	return "", fmt.Errorf("sing-box binary not found. configured=%s, installed=%s", emptyIf(configured, "(empty)"), emptyIf(installed, "(none)"))
+}
+
+func emptyIf(v, fallback string) string {
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return v
+}
+
+func extractZip(archivePath, extractDir string) error {
+    zr, err := zip.OpenReader(archivePath)
+    if err != nil {
+        return err
+    }
+    defer zr.Close()
+    for _, f := range zr.File {
+        dest := filepath.Join(extractDir, filepath.Clean(f.Name))
+        if f.FileInfo().IsDir() {
+            if err := os.MkdirAll(dest, 0o755); err != nil {
+                return err
+            }
+            continue
+        }
+        if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+            return err
+        }
+        rc, err := f.Open()
+        if err != nil {
+            return err
+        }
+        b, err := io.ReadAll(rc)
+        rc.Close()
+        if err != nil {
+            return err
+        }
+        if err := os.WriteFile(dest, b, 0o644); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+
+func extractTarGz(archivePath, extractDir string) error {
+    f, err := os.Open(archivePath)
+    if err != nil {
+        return err
+    }
+    defer f.Close()
+    gz, err := gzip.NewReader(f)
+    if err != nil {
+        return err
+    }
+    defer gz.Close()
+    tr := tar.NewReader(gz)
+    for {
+        hdr, err := tr.Next()
+        if err == io.EOF {
+            break
+        }
+        if err != nil {
+            return err
+        }
+        dest := filepath.Join(extractDir, filepath.Clean(hdr.Name))
+        if hdr.FileInfo().IsDir() {
+            if err := os.MkdirAll(dest, 0o755); err != nil {
+                return err
+            }
+            continue
+        }
+        if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+            return err
+        }
+        b, err := io.ReadAll(tr)
+        if err != nil {
+            return err
+        }
+        if err := os.WriteFile(dest, b, 0o644); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+
+func findBinaryFile(root, name string) (string, error) {
+    var found string
+    err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+        if err != nil {
+            return nil
+        }
+        if !info.IsDir() && info.Name() == name {
+            found = path
+            return io.EOF
+        }
+        return nil
+    })
+    if err == io.EOF && found != "" {
+        return found, nil
+    }
+    if found != "" {
+        return found, nil
+    }
+    return "", fmt.Errorf("Executable not found in archive: %s", name)
+}
+
+func detectPlatform() map[string]any {
+    osName := map[string]string{"windows": "windows", "linux": "linux", "darwin": "darwin"}[runtime.GOOS]
+    arch := map[string]string{"amd64": "amd64", "arm64": "arm64"}[runtime.GOARCH]
+    if osName == "" || arch == "" {
+        osName = runtime.GOOS
+        arch = runtime.GOARCH
+    }
+    exe := "sing-box"
+    if osName == "windows" {
+        exe = "sing-box.exe"
+    }
+    return map[string]any{"detectedAt": time.Now().Format(time.RFC3339), "platform": runtime.GOOS, "arch": runtime.GOARCH, "os": osName, "archName": arch, "assetSuffix": osName + "-" + arch, "executableName": exe}
+}
+
+func fetchSubscription(sub map[string]any) map[string]any {
+    urls := []string{}
+    for _, v := range getSlice(sub, "urls") {
+        s := strings.TrimSpace(mustStr(v))
+        if s != "" {
+            urls = append(urls, s)
+        }
+    }
+    if len(urls) == 0 {
+        if s := strings.TrimSpace(getString(sub, "url", "")); s != "" {
+            urls = append(urls, s)
+        }
+    }
+    if len(urls) == 0 {
+        return map[string]any{"nodes": []any{}, "raw": "", "warnings": []any{"订阅地址为空"}}
+    }
+
+    warnings := []any{}
+    rawParts := []string{}
+    nodes := []map[string]any{}
+    client := &http.Client{Timeout: 20 * time.Second}
+    for _, u := range urls {
+        req, _ := http.NewRequest(http.MethodGet, u, nil)
+        req.Header.Set("user-agent", getString(sub, "userAgent", "sub2socks5-go/0.1.0"))
+        resp, err := client.Do(req)
+        if err != nil {
+            warnings = append(warnings, fmt.Sprintf("订阅拉取失败: %s %v", u, err))
+            continue
+        }
+        body, _ := io.ReadAll(resp.Body)
+        _ = resp.Body.Close()
+        if resp.StatusCode >= 400 {
+            warnings = append(warnings, fmt.Sprintf("订阅拉取失败: %s HTTP %d", u, resp.StatusCode))
+            continue
+        }
+        txt := string(body)
+        rawParts = append(rawParts, "### "+u+"\n"+txt)
+        parsed := parseSubscription(txt)
+        for _, n := range parsed.nodes {
+            nodes = append(nodes, n)
+        }
+        for _, w := range parsed.warnings {
+            warnings = append(warnings, "["+u+"] "+w)
+        }
+    }
+    return map[string]any{"nodes": dedupeNodes(nodes), "raw": strings.Join(rawParts, "\n\n"), "warnings": warnings}
+}
+
+type parseResult struct {
+	nodes    []map[string]any
+	warnings []string
+}
+
+var subscriptionLinkRe = regexp.MustCompile(`(?i)(vmess|vless|trojan|ss|socks5|socks|tuic|hysteria2)://[^\s"'<>]+`)
+
+func parseSubscription(raw string) parseResult {
+	txt := strings.TrimSpace(raw)
+	txt = decodeMaybeBase64Subscription(txt)
+	lines := extractSubscriptionLines(txt)
+	out := parseResult{nodes: []map[string]any{}, warnings: []string{}}
+	for _, line := range lines {
+		line = sanitizeSubscriptionLine(line)
+		if line == "" {
+			continue
+		}
+		node, err := parseNodeLine(line)
+		if err != nil {
+			if looksLikeSubscriptionPayload(line) {
+				out.warnings = append(out.warnings, "节点解析失败: "+err.Error())
+			}
+			continue
+		}
+		out.nodes = append(out.nodes, node)
+	}
+	return out
+}
+
+func parseManualNodeInput(raw string) map[string]any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]any{"nodes": []any{}, "warnings": []any{"手动导入内容为空"}}
+	}
+	if strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "[") {
+        var v any
+        if json.Unmarshal([]byte(raw), &v) == nil {
+            arr := []any{}
+            switch t := v.(type) {
+            case []any:
+                arr = t
+            default:
+                arr = []any{t}
+            }
+            nodes := []any{}
+            warnings := []any{}
+            for _, it := range arr {
+                m, ok := it.(map[string]any)
+                if !ok {
+                    warnings = append(warnings, "结构化节点解析失败: 节点必须是对象")
+                    continue
+                }
+                if r, ok := m["raw"].(string); ok && strings.TrimSpace(r) != "" {
+                    n, err := parseNodeLine(strings.TrimSpace(r))
+                    if err != nil {
+                        warnings = append(warnings, "结构化节点解析失败: "+err.Error())
+                        continue
+                    }
+                    nodes = append(nodes, n)
+                    continue
+                }
+                nodes = append(nodes, m)
+            }
+            return map[string]any{"nodes": nodes, "warnings": warnings}
+        }
+	}
+	pr := parseSubscription(raw)
+    nodes := make([]any, 0, len(pr.nodes))
+    for _, n := range pr.nodes {
+        nodes = append(nodes, n)
+    }
+    ws := make([]any, 0, len(pr.warnings))
+    for _, w := range pr.warnings {
+        ws = append(ws, w)
+    }
+    return map[string]any{"nodes": nodes, "warnings": ws}
+}
+
+func parseNodeLine(line string) (map[string]any, error) {
+	line = sanitizeSubscriptionLine(line)
+	lower := strings.ToLower(line)
+	switch {
+	case strings.HasPrefix(lower, "vless://"), strings.HasPrefix(lower, "trojan://"), strings.HasPrefix(lower, "hysteria2://"), strings.HasPrefix(lower, "tuic://"), strings.HasPrefix(lower, "socks5://"), strings.HasPrefix(lower, "socks://"):
+		u, err := url.Parse(line)
+		if err != nil { return nil, err }
+		tag := strings.TrimPrefix(u.Fragment, "#")
+		if d, err := url.QueryUnescape(tag); err == nil {
+			tag = d
+		}
+		if tag == "" { tag = u.Host }
+		node := map[string]any{"tag": tag, "server": u.Hostname(), "server_port": mustAtoiDefault(u.Port(), 443)}
+		switch u.Scheme {
+		case "vless":
+			node["type"] = "vless"
+			node["uuid"] = u.User.Username()
+			if flow := strings.TrimSpace(u.Query().Get("flow")); flow != "" {
+				node["flow"] = flow
+			}
+			if tls := buildTLSFromURL(u); tls != nil {
+				node["tls"] = tls
+			}
+			if transport := buildTransportFromURL(u); transport != nil {
+				node["transport"] = transport
+			}
+		case "trojan":
+			node["type"] = "trojan"
+			node["password"] = u.User.Username()
+			if tls := buildTLSFromURL(u); tls != nil {
+				node["tls"] = tls
+			}
+		case "hysteria2":
+			node["type"] = "hysteria2"
+			node["password"] = u.User.Username()
+			if tls := buildTLSFromURL(u); tls != nil {
+				node["tls"] = tls
+			}
+			if up := u.Query().Get("upmbps"); strings.TrimSpace(up) != "" {
+				node["up_mbps"] = mustAtoiDefault(up, 0)
+			}
+			if down := u.Query().Get("downmbps"); strings.TrimSpace(down) != "" {
+				node["down_mbps"] = mustAtoiDefault(down, 0)
+			}
+		case "tuic":
+			node["type"] = "tuic"
+			node["uuid"] = u.User.Username()
+			p, _ := u.User.Password()
+			node["password"] = p
+			if tls := buildTLSFromURL(u); tls != nil {
+				node["tls"] = tls
+			}
+			if cc := strings.TrimSpace(u.Query().Get("congestion_control")); cc != "" {
+				node["congestion_control"] = cc
+			} else {
+				node["congestion_control"] = "bbr"
+			}
+		default:
+			node["type"] = "socks"
+			node["server_port"] = mustAtoiDefault(u.Port(), 1080)
+			node["username"] = u.User.Username()
+			p, _ := u.User.Password()
+			node["password"] = p
+		}
+		return node, nil
+	case strings.HasPrefix(lower, "vmess://"):
+        s := strings.TrimPrefix(line, "vmess://")
+        b, err := base64.StdEncoding.DecodeString(padBase64(s)); if err != nil { return nil, err }
+        var v map[string]any
+        if err := json.Unmarshal(b, &v); err != nil { return nil, err }
+		node := map[string]any{"type": "vmess", "tag": getString(v, "ps", "vmess"), "server": getString(v, "add", ""), "server_port": mustAtoiDefault(getString(v, "port", "0"), 0), "uuid": getString(v, "id", "")}
+		if scy := strings.TrimSpace(getString(v, "scy", "")); scy != "" {
+			node["security"] = scy
+		} else {
+			node["security"] = "auto"
+		}
+		node["alter_id"] = mustAtoiDefault(getString(v, "aid", "0"), 0)
+		if strings.EqualFold(getString(v, "tls", ""), "tls") {
+			tls := map[string]any{"enabled": true, "server_name": firstNonEmpty(getString(v, "sni", ""), getString(v, "host", ""), getString(v, "add", ""))}
+			if getString(v, "allowInsecure", "") == "1" {
+				tls["insecure"] = true
+			}
+			node["tls"] = tls
+		}
+		if tr := buildVmessTransport(v); tr != nil {
+			node["transport"] = tr
+		}
+		return node, nil
+	case strings.HasPrefix(lower, "ss://"):
+        s := strings.TrimPrefix(line, "ss://")
+        parts := strings.SplitN(s, "#", 2)
+        main := parts[0]
+        tag := "shadowsocks"
+        if len(parts) == 2 { tag, _ = url.QueryUnescape(parts[1]) }
+		if !strings.Contains(main, "@") {
+			dec, err := base64.StdEncoding.DecodeString(padBase64(main)); if err == nil { main = string(dec) }
+		} else {
+			parts2 := strings.SplitN(main, "@", 2)
+			if len(parts2) == 2 {
+				if dec, err := base64.StdEncoding.DecodeString(padBase64(parts2[0])); err == nil {
+					if strings.Contains(string(dec), ":") {
+						main = string(dec) + "@" + parts2[1]
+					}
+				}
+			}
+		}
+		u, err := url.Parse("ss://" + main); if err != nil { return nil, err }
+		pwd, _ := u.User.Password()
+		return map[string]any{"type": "shadowsocks", "tag": tag, "server": u.Hostname(), "server_port": mustAtoiDefault(u.Port(), 0), "method": u.User.Username(), "password": pwd}, nil
+    default:
+        return nil, fmt.Errorf("不支持的协议")
+    }
+}
+
+func buildTLSFromURL(u *url.URL) map[string]any {
+	q := u.Query()
+	security := strings.TrimSpace(q.Get("security"))
+	isTLS := u.Scheme == "trojan" || q.Get("tls") == "1" || strings.EqualFold(security, "tls") || strings.EqualFold(security, "reality")
+	if !isTLS {
+		return nil
+	}
+	fingerprint := firstNonEmpty(q.Get("fp"), q.Get("fingerprint"), q.Get("client-fingerprint"))
+	if fingerprint == "" && strings.EqualFold(security, "reality") {
+		fingerprint = "chrome"
+	}
+	tls := map[string]any{
+		"enabled":     true,
+		"server_name": firstNonEmpty(q.Get("sni"), u.Hostname()),
+		"insecure":    q.Get("allowInsecure") == "1",
+	}
+	if fingerprint != "" && u.Scheme != "hysteria2" && u.Scheme != "tuic" {
+		tls["utls"] = map[string]any{"enabled": true, "fingerprint": fingerprint}
+	}
+	if strings.EqualFold(security, "reality") {
+		tls["reality"] = map[string]any{
+			"enabled":    true,
+			"public_key": emptyToNil(q.Get("pbk")),
+			"short_id":   emptyToNil(q.Get("sid")),
+		}
+	}
+	if u.Scheme == "hysteria2" || u.Scheme == "tuic" {
+		tls["alpn"] = []any{"h3"}
+	}
+	return tls
+}
+
+func buildTransportFromURL(u *url.URL) map[string]any {
+	t := strings.TrimSpace(u.Query().Get("type"))
+	if t == "" || t == "tcp" {
+		return nil
+	}
+	q := u.Query()
+	switch t {
+	case "ws":
+		tr := map[string]any{"type": "ws", "path": firstNonEmpty(q.Get("path"), "/")}
+		if host := strings.TrimSpace(q.Get("host")); host != "" {
+			tr["headers"] = map[string]any{"Host": host}
+		}
+		return tr
+	case "grpc":
+		return map[string]any{"type": "grpc", "service_name": q.Get("serviceName")}
+	case "http":
+		tr := map[string]any{"type": "http", "path": firstNonEmpty(q.Get("path"), "/")}
+		if host := strings.TrimSpace(q.Get("host")); host != "" {
+			tr["host"] = []any{host}
+		}
+		return tr
+	default:
+		return map[string]any{"type": t}
+	}
+}
+
+func buildVmessTransport(v map[string]any) map[string]any {
+	netType := strings.TrimSpace(getString(v, "net", ""))
+	switch netType {
+	case "ws":
+		tr := map[string]any{"type": "ws", "path": firstNonEmpty(getString(v, "path", ""), "/")}
+		if host := strings.TrimSpace(getString(v, "host", "")); host != "" {
+			tr["headers"] = map[string]any{"Host": host}
+		}
+		return tr
+	case "grpc":
+		return map[string]any{"type": "grpc", "service_name": getString(v, "path", "")}
+	case "http":
+		tr := map[string]any{"type": "http", "path": firstNonEmpty(getString(v, "path", ""), "/")}
+		if host := strings.TrimSpace(getString(v, "host", "")); host != "" {
+			tr["host"] = []any{host}
+		}
+		return tr
+	default:
+		return nil
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func emptyToNil(v string) any {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+func sanitizeSubscriptionLine(line string) string {
+	line = strings.TrimSpace(line)
+	line = strings.TrimPrefix(line, "\uFEFF")
+	line = strings.TrimLeft(line, "`'\"[{(")
+	line = strings.TrimRight(line, "`'\"]})],;")
+	line = strings.ReplaceAll(line, "&amp;", "&")
+	line = strings.Join(strings.Fields(line), "")
+	return line
+}
+
+func extractSubscriptionLines(text string) []string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		clean := sanitizeSubscriptionLine(line)
+		if clean == "" {
+			continue
+		}
+		matches := subscriptionLinkRe.FindAllString(clean, -1)
+		if len(matches) > 0 {
+			out = append(out, matches...)
+			continue
+		}
+		nested := decodeBase64Line(clean)
+		if nested != "" {
+			nestedLines := strings.Split(strings.ReplaceAll(nested, "\r\n", "\n"), "\n")
+			for _, nl := range nestedLines {
+				nl = sanitizeSubscriptionLine(nl)
+				if nl == "" {
+					continue
+				}
+				nm := subscriptionLinkRe.FindAllString(nl, -1)
+				if len(nm) > 0 {
+					out = append(out, nm...)
+				}
+			}
+			continue
+		}
+		out = append(out, clean)
+	}
+	return out
+}
+
+func decodeMaybeBase64Subscription(text string) string {
+	clean := strings.TrimSpace(text)
+	if subscriptionLinkRe.MatchString(clean) {
+		return clean
+	}
+	n := normalizeBase64(clean)
+	if n == "" {
+		return clean
+	}
+	b, err := base64.StdEncoding.DecodeString(n)
+	if err != nil {
+		return clean
+	}
+	decoded := strings.TrimSpace(string(b))
+	if subscriptionLinkRe.MatchString(decoded) {
+		return decoded
+	}
+	return clean
+}
+
+func decodeBase64Line(line string) string {
+	n := normalizeBase64(line)
+	if n == "" {
+		return ""
+	}
+	b, err := base64.StdEncoding.DecodeString(n)
+	if err != nil {
+		return ""
+	}
+	decoded := strings.TrimSpace(string(b))
+	if subscriptionLinkRe.MatchString(decoded) {
+		return decoded
+	}
+	return ""
+}
+
+func normalizeBase64(value string) string {
+	compact := strings.Join(strings.Fields(value), "")
+	if len(compact) < 16 {
+		return ""
+	}
+	for _, ch := range compact {
+		if !(ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '/' || ch == '_' || ch == '+' || ch == '=' || ch == '-') {
+			return ""
+		}
+	}
+	base := strings.ReplaceAll(strings.ReplaceAll(compact, "-", "+"), "_", "/")
+	if len(base)%4 == 1 {
+		return ""
+	}
+	for len(base)%4 != 0 {
+		base += "="
+	}
+	return base
+}
+
+func looksLikeSubscriptionPayload(line string) bool {
+	if subscriptionLinkRe.MatchString(line) {
+		return true
+	}
+	if len(line) < 16 {
+		return false
+	}
+	for _, ch := range line {
+		if !(ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '/' || ch == '_' || ch == '+' || ch == '=' || ch == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func buildSingBoxConfig(cfg, sub map[string]any) map[string]any {
+	nr := getMap(cfg, "nodeRegistry")
+	nodes := []any{}
+	nodes = append(nodes, getSlice(sub, "nodes")...)
+	nodes = append(nodes, getSlice(nr, "manualNodes")...)
+
+	outbounds := []any{map[string]any{"type": "direct", "tag": "direct"}, map[string]any{"type": "block", "tag": "block"}}
+	normalizedNodeMap := map[string]map[string]any{}
+	tags := []string{}
+	for _, n := range nodes {
+		m, ok := n.(map[string]any)
+		if !ok { continue }
+		normalized := normalizeOutboundForSingBox(m)
+		if normalized == nil {
+			continue
+		}
+		outbounds = append(outbounds, normalized)
+		normalizedNodeMap[mustStr(normalized["tag"])] = normalized
+		m = normalized
+		if t := mustStr(m["tag"]); t != "" { tags = append(tags, t) }
+	}
+
+	groupTags := []string{}
+	for _, g := range getSlice(nr, "groups") {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		tag := strings.TrimSpace(mustStr(gm["tag"]))
+		if tag == "" {
+			continue
+		}
+		members := []string{}
+		for _, m := range getSlice(gm, "members") {
+			mtag := strings.TrimSpace(mustStr(m))
+			if mtag == "" {
+				continue
+			}
+			if _, ok := normalizedNodeMap[mtag]; ok {
+				members = append(members, mtag)
+			}
+		}
+		if len(members) == 0 {
+			continue
+		}
+		strategy := strings.TrimSpace(mustStr(gm["strategy"]))
+		if strategy == "fallback" {
+			outbounds = append(outbounds, map[string]any{
+				"type":                       "selector",
+				"tag":                        tag,
+				"outbounds":                  toAnySliceString(members),
+				"default":                    members[0],
+				"interrupt_exist_connections": false,
+			})
+		} else {
+			url := strings.TrimSpace(mustStr(gm["url"]))
+			if url == "" {
+				url = "https://www.gstatic.com/generate_204"
+			}
+			interval := strings.TrimSpace(mustStr(gm["interval"]))
+			if interval == "" {
+				interval = "10m"
+			}
+			outbounds = append(outbounds, map[string]any{
+				"type":      "urltest",
+				"tag":       tag,
+				"outbounds": toAnySliceString(members),
+				"url":       url,
+				"interval":  interval,
+				"tolerance": 50,
+			})
+		}
+		groupTags = append(groupTags, tag)
+	}
+
+	chainTags := []string{}
+	for _, c := range getSlice(nr, "chains") {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		chainTag := strings.TrimSpace(mustStr(cm["tag"]))
+		if chainTag == "" {
+			continue
+		}
+		members := []string{}
+		for _, m := range getSlice(cm, "members") {
+			mtag := strings.TrimSpace(mustStr(m))
+			if _, ok := normalizedNodeMap[mtag]; ok {
+				members = append(members, mtag)
+			}
+		}
+		if len(members) == 0 {
+			continue
+		}
+		previous := ""
+		for i, memberTag := range members {
+			base := normalizeOutboundForSingBox(normalizedNodeMap[memberTag])
+			if base == nil {
+				continue
+			}
+			hopTag := fmt.Sprintf("%s__hop_%d", chainTag, i+1)
+			base["tag"] = hopTag
+			if previous != "" {
+				base["detour"] = previous
+			}
+			outbounds = append(outbounds, base)
+			previous = hopTag
+		}
+		if previous != "" {
+			outbounds = append(outbounds, map[string]any{
+				"type":                       "selector",
+				"tag":                        chainTag,
+				"outbounds":                  []any{previous},
+				"default":                    previous,
+				"interrupt_exist_connections": false,
+			})
+			chainTags = append(chainTags, chainTag)
+		}
+	}
+
+	tags = append(tags, groupTags...)
+	tags = append(tags, chainTags...)
+	if len(tags) > 0 {
+		outbounds = append(outbounds, map[string]any{"type": "selector", "tag": "proxy", "outbounds": tags, "default": tags[0]})
+		outbounds = append(outbounds, map[string]any{"type": "urltest", "tag": "auto", "outbounds": tags, "url": "https://www.gstatic.com/generate_204", "interval": "10m", "tolerance": 50})
+	}
+
+    inbounds := []any{}
+    for _, p := range getSlice(cfg, "ports") {
+        pm, ok := p.(map[string]any)
+        if !ok { continue }
+        inbounds = append(inbounds, map[string]any{"type": "socks", "tag": mustStr(pm["tag"]), "listen": mustStr(pm["listen"]), "listen_port": int(toFloat(pm["port"]))})
+    }
+
+    dnsCfg := getMap(cfg, "dns")
+    routing := getMap(cfg, "routing")
+    return map[string]any{
+        "log": map[string]any{"level": getString(getMap(cfg, "app"), "logLevel", "info"), "timestamp": true},
+        "dns": map[string]any{"servers": []any{map[string]any{"tag": "dns-remote-default", "type": "https", "server": "cloudflare-dns.com", "path": "/dns-query", "detour": "proxy"}, map[string]any{"tag": "dns-bootstrap", "type": "udp", "server": getString(dnsCfg, "bootstrapServer", "1.1.1.1"), "server_port": 53}, map[string]any{"tag": "dns-direct", "type": "local"}}, "rules": []any{map[string]any{"clash_mode": "Direct", "server": "dns-direct"}, map[string]any{"server": "dns-remote-default"}}, "final": "dns-remote-default", "strategy": getString(dnsCfg, "strategy", "prefer_ipv4")},
+        "inbounds":  inbounds,
+        "outbounds": outbounds,
+        "route": map[string]any{"auto_detect_interface": true, "final": getString(routing, "routeFinal", "proxy"), "default_domain_resolver": map[string]any{"server": "dns-bootstrap", "strategy": getString(dnsCfg, "strategy", "prefer_ipv4")}, "rules": []any{}},
+        "experimental": map[string]any{"cache_file": map[string]any{"enabled": true, "path": "cache.db", "store_rdrc": true, "store_fakeip": true}, "clash_api": map[string]any{"external_controller": "127.0.0.1:19090", "external_ui": "", "secret": ""}},
+    }
+}
+
+func toAnySliceString(in []string) []any {
+	out := make([]any, 0, len(in))
+	for _, item := range in {
+		out = append(out, item)
+	}
+	return out
+}
+
+func normalizeOutboundForSingBox(node map[string]any) map[string]any {
+	if node == nil {
+		return nil
+	}
+	cloned := cloneMap(node)
+	t := mustStr(cloned["type"])
+	if t == "" || mustStr(cloned["tag"]) == "" {
+		return nil
+	}
+
+	if t == "hysteria2" || t == "tuic" {
+		tls, _ := cloned["tls"].(map[string]any)
+		if tls == nil {
+			tls = map[string]any{}
+		}
+		tls["enabled"] = true
+		if strings.TrimSpace(mustStr(tls["server_name"])) == "" {
+			tls["server_name"] = mustStr(cloned["server"])
+		}
+		if _, ok := tls["insecure"]; !ok {
+			tls["insecure"] = false
+		}
+		if _, ok := tls["alpn"]; !ok {
+			tls["alpn"] = []any{"h3"}
+		}
+		cloned["tls"] = tls
+	}
+
+	if t == "vless" || t == "trojan" || t == "vmess" || t == "hysteria2" || t == "tuic" || t == "shadowsocks" || t == "socks" {
+		if strings.TrimSpace(mustStr(cloned["server"])) == "" || int(toFloat(cloned["server_port"])) <= 0 {
+			return nil
+		}
+	}
+
+	if t == "vless" && strings.TrimSpace(mustStr(cloned["uuid"])) == "" {
+		return nil
+	}
+	if t == "trojan" && strings.TrimSpace(mustStr(cloned["password"])) == "" {
+		return nil
+	}
+	if t == "hysteria2" && strings.TrimSpace(mustStr(cloned["password"])) == "" {
+		return nil
+	}
+	if t == "tuic" && (strings.TrimSpace(mustStr(cloned["uuid"])) == "" || strings.TrimSpace(mustStr(cloned["password"])) == "") {
+		return nil
+	}
+	if t == "shadowsocks" && (strings.TrimSpace(mustStr(cloned["method"])) == "" || strings.TrimSpace(mustStr(cloned["password"])) == "") {
+		return nil
+	}
+
+	return cloned
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	b, err := json.Marshal(in)
+	if err != nil {
+		return map[string]any{}
+	}
+	out := map[string]any{}
+	if json.Unmarshal(b, &out) != nil {
+		return map[string]any{}
+	}
+	return out
+}
+
+func collectOutbounds(cfg, sub map[string]any) []any {
+	nr := getMap(cfg, "nodeRegistry")
+	groups := []any{}
+	for _, g := range getSlice(nr, "groups") {
+		if m, ok := g.(map[string]any); ok {
+			groups = append(groups, map[string]any{"tag": mustStr(m["tag"]), "type": mustStr(m["strategy"]), "source": "group", "label": fmt.Sprintf("%s（%s / 节点组）", mustStr(m["tag"]), mustStr(m["strategy"]))})
+		}
+	}
+	chains := []any{}
+	for _, c := range getSlice(nr, "chains") {
+		if m, ok := c.(map[string]any); ok {
+			chains = append(chains, map[string]any{"tag": mustStr(m["tag"]), "type": "chain", "source": "chain", "label": fmt.Sprintf("%s（chain / 链式代理）", mustStr(m["tag"]))})
+		}
+	}
+	manualNodes := []any{}
+	for _, n := range getSlice(nr, "manualNodes") {
+		if m, ok := n.(map[string]any); ok {
+			manualNodes = append(manualNodes, map[string]any{"tag": mustStr(m["tag"]), "type": mustStr(m["type"]), "source": "manual", "label": fmt.Sprintf("%s（%s / 手动）", mustStr(m["tag"]), mustStr(m["type"]))})
+		}
+	}
+	subscriptionNodes := []any{}
+	for _, n := range getSlice(sub, "nodes") {
+		if m, ok := n.(map[string]any); ok {
+			subscriptionNodes = append(subscriptionNodes, map[string]any{"tag": mustStr(m["tag"]), "type": mustStr(m["type"]), "source": "subscription", "label": fmt.Sprintf("%s（%s / 订阅）", mustStr(m["tag"]), mustStr(m["type"]))})
+		}
+	}
+	builtins := []any{
+		map[string]any{"tag": "proxy", "type": "selector", "source": "builtin", "label": "proxy（自动选择）"},
+		map[string]any{"tag": "auto", "type": "urltest", "source": "builtin", "label": "auto（延迟测试）"},
+		map[string]any{"tag": "block", "type": "block", "source": "builtin", "label": "block"},
+	}
+	return append(append(append(append(groups, chains...), manualNodes...), subscriptionNodes...), builtins...)
+}
+
+func defaultConfig() map[string]any {
+	exe := filepath.ToSlash(filepath.Join("internal", "bin", map[bool]string{true: "sing-box.exe", false: "sing-box"}[runtime.GOOS == "windows"]))
+    return map[string]any{
+        "app": map[string]any{"host": "0.0.0.0", "port": 18080, "singBoxBinary": exe, "autoStart": false, "logLevel": "info"},
+        "subscription": map[string]any{"url": "", "urls": []any{}, "format": "raw", "userAgent": "sub2socks5/0.1.0", "refreshIntervalMinutes": 60, "headers": map[string]any{}},
+        "dns": map[string]any{"strategy": "prefer_ipv4", "remotePreset": "cloudflare", "remoteUrl": "https://cloudflare-dns.com/dns-query", "bootstrapServer": "1.1.1.1"},
+        "routing": map[string]any{"routeFinal": "proxy", "autoDetectInterface": true, "ruleSetUrls": []any{}, "rules": []any{map[string]any{"action": "sniff"}}},
+        "nodeRegistry": map[string]any{"manualNodes": []any{}, "groups": []any{}, "chains": []any{}, "disabledSubscriptionTags": []any{}},
+        "runtimeState": map[string]any{"fallbackGroups": map[string]any{}},
+        "ports": []any{map[string]any{"tag": "default-socks", "listen": "127.0.0.1", "port": 18081, "target": "proxy", "sniff": true}},
+    }
+}
+
+func findPort(host string, start int) int {
+    for p := start; p <= 65535; p++ {
+        l, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, p))
+        if err == nil {
+            _ = l.Close()
+            return p
+        }
+    }
+    return start
+}
+
+func withCORS(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("x-content-type-options", "nosniff")
+        w.Header().Set("x-frame-options", "DENY")
+        w.Header().Set("referrer-policy", "no-referrer")
+        w.Header().Set("cross-origin-resource-policy", "same-origin")
+        w.Header().Set("cache-control", "no-store")
+        w.Header().Set("access-control-allow-origin", "*")
+        w.Header().Set("access-control-allow-methods", "GET, POST, HEAD, OPTIONS")
+        w.Header().Set("access-control-allow-headers", "content-type")
+        if r.Method == http.MethodOptions {
+            w.WriteHeader(http.StatusNoContent)
+            return
+        }
+        next.ServeHTTP(w, r)
+    })
+}
+
+func ok(w http.ResponseWriter, v any) {
+    w.Header().Set("content-type", "application/json; charset=utf-8")
+    w.WriteHeader(200)
+    _ = json.NewEncoder(w).Encode(v)
+}
+
+func fail(w http.ResponseWriter, status int, msg string) {
+    w.Header().Set("content-type", "application/json; charset=utf-8")
+    w.WriteHeader(status)
+    _ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": msg, "status": status}})
+}
+
+func methodNotAllowed(w http.ResponseWriter, allow string) {
+    w.Header().Set("Allow", allow)
+    fail(w, 405, "Method Not Allowed")
+}
+
+func writeJSON(path string, v any) error {
+    b, err := json.MarshalIndent(v, "", "  ")
+    if err != nil { return err }
+    return os.WriteFile(path, b, 0o644)
+}
+
+func readJSON(path string, v any) error {
+    b, err := os.ReadFile(path)
+    if err != nil { return err }
+    return json.Unmarshal(b, v)
+}
+
+func decodeJSON(r io.Reader, v any) error {
+    b, err := io.ReadAll(r)
+    if err != nil { return err }
+    if len(bytes.TrimSpace(b)) == 0 { b = []byte("{}") }
+    return json.Unmarshal(b, v)
+}
+
+func mergeMap(base, incoming map[string]any) map[string]any {
+    out := map[string]any{}
+    for k, v := range base {
+        out[k] = v
+    }
+    for k, v := range incoming {
+        if bm, ok := out[k].(map[string]any); ok {
+            if im, ok2 := v.(map[string]any); ok2 {
+                out[k] = mergeMap(bm, im)
+                continue
+            }
+        }
+        out[k] = v
+    }
+    return out
+}
+
+func getMap(m map[string]any, key string) map[string]any {
+    if v, ok := m[key].(map[string]any); ok { return v }
+    return map[string]any{}
+}
+func getSlice(m map[string]any, key string) []any {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return []any{}
+	}
+	if arr, ok := v.([]any); ok {
+		return arr
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Slice {
+		return []any{}
+	}
+	out := make([]any, 0, rv.Len())
+	for i := 0; i < rv.Len(); i += 1 {
+		out = append(out, rv.Index(i).Interface())
+	}
+	return out
+}
+func getString(m map[string]any, key, def string) string {
+    s := mustStr(m[key]); if s == "" { return def }; return s
+}
+func getInt(m map[string]any, key string, def int) int {
+    if m == nil { return def }
+    v := int(toFloat(m[key])); if v == 0 { return def }; return v
+}
+func toFloat(v any) float64 {
+    switch t := v.(type) {
+    case float64: return t
+    case float32: return float64(t)
+    case int: return float64(t)
+    case int64: return float64(t)
+    case json.Number:
+        f, _ := t.Float64(); return f
+    case string:
+        f, _ := strconv.ParseFloat(strings.TrimSpace(t), 64); return f
+    default: return 0
+    }
+}
+func mustStr(v any) string {
+    switch t := v.(type) {
+    case string: return t
+    case fmt.Stringer: return t.String()
+    default:
+        if v == nil { return "" }
+        b, _ := json.Marshal(v)
+        s := string(b)
+        s = strings.Trim(s, `"`)
+        return s
+    }
+}
+func mustAtoiDefault(s string, d int) int { n, err := strconv.Atoi(strings.TrimSpace(s)); if err != nil || n == 0 { return d }; return n }
+func getStringSlice(m map[string]any, key string) []string {
+    out := []string{}
+    for _, v := range getSlice(m, key) { out = append(out, mustStr(v)) }
+    return out
+}
+func toStringSet(in []any) map[string]bool { out := map[string]bool{}; for _, v := range in { out[mustStr(v)] = true }; return out }
+func padBase64(s string) string { s = strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(s), "-", "+"), "_", "/"); for len(s)%4 != 0 { s += "=" }; return s }
+func tryDecodeBase64Subscription(s string) string {
+    if strings.Contains(s, "://") { return s }
+    b, err := base64.StdEncoding.DecodeString(padBase64(s)); if err != nil { return s }
+    t := strings.TrimSpace(string(b))
+    if strings.Contains(t, "://") { return t }
+    return s
+}
+func dedupeNodes(in []map[string]any) []map[string]any {
+    seen := map[string]bool{}
+    out := []map[string]any{}
+    for _, n := range in {
+        k := fmt.Sprintf("%s::%s::%s::%v", mustStr(n["type"]), mustStr(n["tag"]), mustStr(n["server"]), n["server_port"])
+        if seen[k] { continue }
+        seen[k] = true
+        out = append(out, n)
+    }
+    sort.SliceStable(out, func(i, j int) bool { return mustStr(out[i]["tag"]) < mustStr(out[j]["tag"]) })
+    return out
+}
+
+func must(err error) { if err != nil { panic(err) } }
+
+var _ = exec.Command

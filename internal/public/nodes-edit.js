@@ -47,6 +47,7 @@ let state = {
   disabledSubscriptionTags: [],
   manualNodes: [],
   groups: [],
+  chains: [],
   availableOutbounds: [],
   fallbackStates: {}
 };
@@ -106,7 +107,7 @@ function renderFormFields() {
 function renderNodeList() {
   nodeListEl.innerHTML = '';
   const nodes = [
-    ...state.subscriptionNodes.filter((node) => node.tag !== 'direct').map((node) => ({ ...node, source: 'subscription' })),
+    ...state.subscriptionNodes.map((node) => ({ ...node, source: 'subscription' })),
     ...state.manualNodes.map((node) => ({ ...node, source: 'manual' }))
   ];
   if (!nodes.length) {
@@ -258,12 +259,17 @@ document.getElementById('import-edit-manual-nodes').addEventListener('click', as
 
 document.getElementById('save-edit-nodes').addEventListener('click', async () => {
   try {
+    const duplicateManualTag = findDuplicateTag(state.manualNodes);
+    if (duplicateManualTag) {
+      throw new Error(`手动节点 tag 重复：${duplicateManualTag}`);
+    }
     const response = await fetch('/api/nodes', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         manualNodes: state.manualNodes,
         groups: state.groups,
+        chains: state.chains,
         disabledSubscriptionTags: state.disabledSubscriptionTags
       })
     });
@@ -305,3 +311,14 @@ document.addEventListener('click', (event) => {
 });
 
 load().catch((error) => setStatus(error.message, 'error'));
+
+function findDuplicateTag(nodes) {
+  const seen = new Set();
+  for (const node of nodes || []) {
+    const tag = String(node?.tag || '').trim();
+    if (!tag) continue;
+    if (seen.has(tag)) return tag;
+    seen.add(tag);
+  }
+  return '';
+}

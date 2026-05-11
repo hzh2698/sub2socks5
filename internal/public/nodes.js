@@ -259,11 +259,11 @@ function buildGroupUrlPresetOptions(currentUrl) {
 }
 
 function getSelectableNodesWithoutChains() {
-  return state.availableOutbounds.filter((item) => !['proxy', 'auto', 'block'].includes(item.tag) && item.source !== 'chain');
+	return state.availableOutbounds.filter((item) => !['proxy', 'auto', 'block', 'direct'].includes(item.tag) && item.source !== 'chain');
 }
 
 function getSelectableNodes() {
-  return state.availableOutbounds.filter((item) => !['proxy', 'auto', 'block'].includes(item.tag));
+	return state.availableOutbounds.filter((item) => !['proxy', 'auto', 'block', 'direct'].includes(item.tag));
 }
 
 function renderNodePill(node) {
@@ -414,6 +414,14 @@ toggleChainsSectionButton.addEventListener('click', () => {
 
 document.getElementById('save-nodes').addEventListener('click', async () => {
   try {
+    const duplicateGroupTag = findDuplicateTag(state.groups);
+    if (duplicateGroupTag) {
+      throw new Error(`节点组 tag 重复：${duplicateGroupTag}`);
+    }
+    const duplicateChainTag = findDuplicateTag(state.chains);
+    if (duplicateChainTag) {
+      throw new Error(`链式代理 tag 重复：${duplicateChainTag}`);
+    }
     const response = await fetch('/api/nodes', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -545,3 +553,14 @@ document.addEventListener('click', (event) => {
 });
 
 load().catch((error) => setStatus(error.message, 'error'));
+
+function findDuplicateTag(items) {
+  const seen = new Set();
+  for (const item of items || []) {
+    const tag = String(item?.tag || '').trim();
+    if (!tag) continue;
+    if (seen.has(tag)) return tag;
+    seen.add(tag);
+  }
+  return '';
+}

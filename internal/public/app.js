@@ -386,7 +386,8 @@ function updateEditorState() {
   }
 
   editor.classList.remove('is-invalid');
-  if (validation.text === lastSavedConfigText) {
+  const saved = latestData.config || safeParseJson(lastSavedConfigText) || {};
+  if (deepEqual(validation.value, saved)) {
     editorStatus.textContent = '配置已保存';
     editorStatus.className = 'editor-status is-saved';
     return;
@@ -398,6 +399,38 @@ function updateEditorState() {
 
 function parseConfigFromCurrentView() {
   return currentView === 'json' ? parseJsonEditor() : parseFormConfig(false);
+}
+
+function safeParseJson(text) {
+  try {
+    return JSON.parse(text || '{}');
+  } catch {
+    return null;
+  }
+}
+
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (a == null || b == null) return a === b;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      if (!deepEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (typeof a === 'object') {
+    const aKeys = Object.keys(a).sort();
+    const bKeys = Object.keys(b).sort();
+    if (aKeys.length !== bKeys.length) return false;
+    for (let i = 0; i < aKeys.length; i += 1) {
+      if (aKeys[i] !== bKeys[i]) return false;
+      if (!deepEqual(a[aKeys[i]], b[bKeys[i]])) return false;
+    }
+    return true;
+  }
+  return a === b;
 }
 
 function parseJsonEditor() {
