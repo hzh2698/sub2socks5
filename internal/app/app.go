@@ -1708,10 +1708,31 @@ func buildSingBoxConfig(cfg, sub map[string]any) map[string]any {
 	}
 
     inbounds := []any{}
+    routeRules := []any{}
     for _, p := range getSlice(cfg, "ports") {
         pm, ok := p.(map[string]any)
-        if !ok { continue }
-        inbounds = append(inbounds, map[string]any{"type": "socks", "tag": mustStr(pm["tag"]), "listen": mustStr(pm["listen"]), "listen_port": int(toFloat(pm["port"]))})
+        if !ok {
+            continue
+        }
+        inboundTag := strings.TrimSpace(mustStr(pm["tag"]))
+        if inboundTag == "" {
+            continue
+        }
+        inbounds = append(inbounds, map[string]any{
+            "type":       "socks",
+            "tag":        inboundTag,
+            "listen":     mustStr(pm["listen"]),
+            "listen_port": int(toFloat(pm["port"])),
+        })
+
+        target := strings.TrimSpace(mustStr(pm["target"]))
+        if target == "" {
+            target = "proxy"
+        }
+        routeRules = append(routeRules, map[string]any{
+            "inbound":  []any{inboundTag},
+            "outbound": target,
+        })
     }
 
     dnsCfg := getMap(cfg, "dns")
@@ -1721,7 +1742,7 @@ func buildSingBoxConfig(cfg, sub map[string]any) map[string]any {
         "dns": map[string]any{"servers": []any{map[string]any{"tag": "dns-remote-default", "type": "https", "server": "cloudflare-dns.com", "path": "/dns-query", "detour": "proxy"}, map[string]any{"tag": "dns-bootstrap", "type": "udp", "server": getString(dnsCfg, "bootstrapServer", "1.1.1.1"), "server_port": 53}, map[string]any{"tag": "dns-direct", "type": "local"}}, "rules": []any{map[string]any{"clash_mode": "Direct", "server": "dns-direct"}, map[string]any{"server": "dns-remote-default"}}, "final": "dns-remote-default", "strategy": getString(dnsCfg, "strategy", "prefer_ipv4")},
         "inbounds":  inbounds,
         "outbounds": outbounds,
-        "route": map[string]any{"auto_detect_interface": true, "final": getString(routing, "routeFinal", "proxy"), "default_domain_resolver": map[string]any{"server": "dns-bootstrap", "strategy": getString(dnsCfg, "strategy", "prefer_ipv4")}, "rules": []any{}},
+        "route": map[string]any{"auto_detect_interface": true, "final": getString(routing, "routeFinal", "proxy"), "default_domain_resolver": map[string]any{"server": "dns-bootstrap", "strategy": getString(dnsCfg, "strategy", "prefer_ipv4")}, "rules": routeRules},
         "experimental": map[string]any{"cache_file": map[string]any{"enabled": true, "path": "cache.db", "store_rdrc": true, "store_fakeip": true}, "clash_api": map[string]any{"external_controller": "127.0.0.1:19090", "external_ui": "", "secret": ""}},
     }
 }
