@@ -1,10 +1,12 @@
 const statusEl = document.getElementById('socks-status');
 const socksListEl = document.getElementById('socks-list');
 const addSocksButton = document.getElementById('add-socks');
+const clearSocksButton = document.getElementById('clear-socks');
 
 let formPorts = [];
 let fullConfig = {};
 let latestAvailableOutbounds = [];
+let savedPortsSnapshot = [];
 
 async function load() {
   const response = await fetch('/api/config');
@@ -15,6 +17,8 @@ async function load() {
   fullConfig = data.config || {};
   latestAvailableOutbounds = data.availableOutbounds || [];
   formPorts = normalizePorts(fullConfig.ports || []);
+  await assignMissingSuggestedPorts();
+  savedPortsSnapshot = JSON.parse(JSON.stringify(formPorts));
   render();
 }
 
@@ -42,6 +46,19 @@ function createDefaultPort() {
 }
 
 function render() {
+  const countBadge = document.getElementById('service-count-badge');
+  const unsavedBadge = document.getElementById('unsaved-badge');
+  const count = formPorts.length;
+  if (countBadge) countBadge.textContent = `${count} 个服务`;
+  const unsaved = JSON.stringify(formPorts) !== JSON.stringify(savedPortsSnapshot);
+  if (unsavedBadge) {
+    if (unsaved && count > 0) {
+      unsavedBadge.textContent = '有未保存的修改';
+      unsavedBadge.style.display = 'inline';
+    } else {
+      unsavedBadge.style.display = 'none';
+    }
+  }
   socksListEl.innerHTML = '';
   if (!formPorts.length) {
     socksListEl.innerHTML = '<div class="timeline-item"><div class="title">暂无 SOCKS5 服务</div></div>';
@@ -51,29 +68,30 @@ function render() {
     const item = document.createElement('div');
     item.className = 'timeline-item';
     item.innerHTML = `
-      <div class="title">SOCKS5 服务 ${index + 1}</div>
-      <div class="form-grid">
-        <label>
-          <span>tag</span>
-          <input data-port-index="${index}" data-port-field="tag" value="${escapeHtmlAttr(portItem.tag || '')}" />
-        </label>
-        <label>
-          <span>监听地址</span>
-          <input data-port-index="${index}" data-port-field="listen" value="${escapeHtmlAttr(portItem.listen || '127.0.0.1')}" />
-        </label>
-        <label>
-          <span>端口</span>
-          <input data-port-index="${index}" data-port-field="port" type="number" min="1" step="1" value="${escapeHtmlAttr(String(portItem.port || ''))}" />
-        </label>
-        <label>
-          <span>目标出口</span>
-          <select data-port-index="${index}" data-port-field="target">
-            ${buildOutboundOptionsHtml(portItem.target)}
-          </select>
-        </label>
-      </div>
-      <div class="section-heading-actions">
-        ${formPorts.length > 1 ? `<button type="button" data-remove-port="${index}">删除</button>` : ''}
+      <div style="max-width:500px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div class="title" style="margin:0">SOCKS5 服务 ${index + 1}</div>
+          <button type="button" data-copy-port="${index}" style="min-width:auto;padding:4px 10px;font-size:13px;background:#e5e7eb;color:#1a1a2e;border-radius:6px">复制</button>
+        </div>
+        <div class="form-grid" style="grid-template-columns:1fr 1fr">
+          <label>
+            <span>监听地址</span>
+            <input data-port-index="${index}" data-port-field="listen" value="${escapeHtmlAttr(portItem.listen || '127.0.0.1')}" />
+          </label>
+          <label>
+            <span>端口</span>
+            <input data-port-index="${index}" data-port-field="port" type="number" min="1" step="1" value="${escapeHtmlAttr(String(portItem.port || ''))}" />
+          </label>
+          <label style="grid-column:1">
+            <span>目标出口</span>
+            <select data-port-index="${index}" data-port-field="target">
+              ${buildOutboundOptionsHtml(portItem.target)}
+            </select>
+          </label>
+          <div style="grid-column:2;display:flex;align-items:flex-end;justify-content:flex-end">
+            ${formPorts.length > 1 ? `<button type="button" data-remove-port="${index}" style="background:#ef4444;white-space:nowrap">删除</button>` : ''}
+          </div>
+        </div>
       </div>
     `;
     socksListEl.appendChild(item);
@@ -176,6 +194,8 @@ document.getElementById('save-socks').addEventListener('click', async () => {
     if (!response.ok) {
       throw new Error(data?.error?.message || '保存失败');
     }
+    savedPortsSnapshot = JSON.parse(JSON.stringify(formPorts));
+    render();
     setStatus('SOCKS5 服务已保存', 'success');
   } catch (error) {
     setStatus(`保存失败：${error.message}`, 'error');
@@ -186,6 +206,23 @@ addSocksButton.addEventListener('click', async () => {
   formPorts.push(createDefaultPort());
   await assignMissingSuggestedPorts();
   render();
+});
+
+clearSocksButton?.addEventListener('click', () => {
+  const confirmed = window.confirm('确认删除当前配置的所有 SOCKS5 服务吗？将重置为 1 个默认服务，保存后生效。');
+  if (!confirmed) {
+    return;
+  }
+  formPorts = [createDefaultPort()];
+  assignMissingSuggestedPorts()
+    .then(() => {
+      render();
+      setStatus('已重置为默认 SOCKS5 服务，请点击“保存配置”以应用', 'idle');
+    })
+    .catch(() => {
+      render();
+      setStatus('已重置为默认 SOCKS5 服务，请点击“保存配置”以应用', 'idle');
+    });
 });
 
 document.addEventListener('input', (event) => {
@@ -218,7 +255,31 @@ document.addEventListener('click', (event) => {
       render();
     }
   }
+  if (target.dataset.copyPort) {
+    const index = Number(target.dataset.copyPort);
+    const p = formPorts[index];
+    if (p && p.listen && p.port) {
+      navigator.clipboard.writeText(`socks5://${p.listen}:${p.port}`).then(
+        () => showToast('复制成功', true),
+        () => showToast('复制失败', false)
+      );
+    }
+  }
 });
+
+const toastEl = document.getElementById('toast-container');
+let toastTimer = null;
+
+function showToast(message, success) {
+  if (!toastEl) return;
+  clearTimeout(toastTimer);
+  toastEl.innerHTML = `${success
+    ? '<span style="color:#10b981;font-size:18px">&#10003;</span>'
+    : '<span style="color:#ef4444;font-size:18px">&#10007;</span>'
+  } ${message}`;
+  toastEl.style.display = 'flex';
+  toastTimer = setTimeout(() => { toastEl.style.display = 'none'; }, 2500);
+}
 
 load()
   .then(() => setStatus('准备就绪', 'idle'))

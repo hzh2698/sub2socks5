@@ -523,6 +523,14 @@ button:disabled {
 .group-toggle {
   background: var(--accent-strong);
 }
+
+#auto-configure-socks {
+  background: #3f8f4f;
+}
+
+#auto-configure-socks:hover {
+  background: #347a42;
+}
 .group-toggle:hover {
   background: #2d4cd6;
 }

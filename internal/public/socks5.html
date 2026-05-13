@@ -8,6 +8,7 @@
 </head>
 <body>
   <main class="container">
+    <div id="toast-container" style="position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:9999;display:none;align-items:center;gap:8px;padding:12px 20px;border-radius:10px;background:#fff;box-shadow:0 4px 16px rgba(0,0,0,0.15);font-size:15px;font-weight:500;pointer-events:none"></div>
     <section>
       <div class="section-heading">
         <h1>SOCKS5 服务</h1>
@@ -21,12 +22,13 @@
 
     <section>
       <div class="section-heading">
-        <h2>服务列表</h2>
+        <h2>服务列表 <span id="service-count-badge" class="editor-status" style="font-size:13px;font-weight:400">0 个服务</span> <span id="unsaved-badge" class="editor-status is-dirty" style="font-size:13px;font-weight:400;display:none">0 个服务未保存</span></h2>
         <div class="section-heading-actions">
+          <button id="clear-socks" type="button" style="background:#ef4444">删除所有 SOCKS5 服务</button>
           <button id="add-socks" type="button">+ 添加 SOCKS5 服务</button>
         </div>
       </div>
-      <div id="socks-list" class="timeline"></div>
+      <div id="socks-list" style="display:grid;grid-template-columns:1fr 1fr;gap:12px"></div>
     </section>
   </main>
   <script type="module" src="/socks5.js"></script>

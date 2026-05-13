@@ -160,9 +160,19 @@
                 <span>默认路由出口</span>
                 <select id="field-route-final"></select>
               </label>
-              <label class="form-row-3 checkbox-field">
+              <label class="form-row-3">
                 <span>自动启动</span>
-                <input id="field-app-auto-start" type="checkbox" />
+                <select id="field-app-auto-start">
+                  <option value="true">是</option>
+                  <option value="false">否</option>
+                </select>
+              </label>
+              <label class="form-row-3">
+                <span>更新订阅后自动配置代理</span>
+                <select id="field-app-auto-configure-subscription">
+                  <option value="true">是</option>
+                  <option value="false">否</option>
+                </select>
               </label>
             </div>
             <div class="section-heading socks-services-heading">
@@ -178,10 +188,10 @@
               <div class="section-heading-actions">
                 <button id="export-socks" type="button">导出 SOCKS5 服务信息</button>
                 <button id="copy-socks" type="button">复制 SOCKS5 服务信息</button>
+                <button id="auto-configure-socks" type="button">一键配置 SOCKS5 服务</button>
                 <button id="edit-socks-service" type="button">编辑 SOCKS5 服务</button>
               </div>
             </div>
-            <div id="socks-services" class="timeline"></div>
             <p class="form-note">表单模式当前覆盖高频字段；复杂规则、DNS 服务器和多端口高级配置请切换到 JSON 模式。</p>
           </div>
 

@@ -21,6 +21,7 @@ const socksServicesEl = document.getElementById('socks-services');
 const socksCountEl = document.getElementById('socks-count');
 const exportSocksButton = document.getElementById('export-socks');
 const copySocksButton = document.getElementById('copy-socks');
+const autoConfigureSocksButton = document.getElementById('auto-configure-socks');
 const editSocksServiceButton = document.getElementById('edit-socks-service');
 const subscriptionUrlsEl = document.getElementById('subscription-urls');
 const addSubscriptionUrlButton = document.getElementById('add-subscription-url');
@@ -56,6 +57,7 @@ const fields = {
   appBinary: document.getElementById('field-app-binary'),
   appLogLevel: document.getElementById('field-app-log-level'),
   appAutoStart: document.getElementById('field-app-auto-start'),
+  appAutoConfigureSubscription: document.getElementById('field-app-auto-configure-subscription'),
   dnsStrategy: document.getElementById('field-dns-strategy'),
   dnsRemotePreset: document.getElementById('field-dns-remote-preset'),
   dnsRemoteUrl: document.getElementById('field-dns-remote-url'),
@@ -161,8 +163,8 @@ function renderOverview() {
       kernelBadge.textContent = '运行中';
       kernelBadge.className = 'editor-status is-saved';
     } else if (isInstalled) {
-      kernelBadge.textContent = '已下载';
-      kernelBadge.className = 'editor-status is-saved';
+      kernelBadge.textContent = '未运行';
+      kernelBadge.className = 'editor-status is-invalid';
     } else {
       kernelBadge.textContent = '未下载';
       kernelBadge.className = 'editor-status is-idle';
@@ -175,7 +177,7 @@ function renderOverview() {
     plannedVersion: latestData.plannedKernel?.version || '',
     plannedAsset: latestData.plannedKernel?.assetName || ''
   }));
-  renderKeyValue(forms.subscription, buildSubscriptionSummary(latestData.subscription));
+  renderKeyValue(forms.subscription, chineseLabels(buildSubscriptionSummary(latestData.subscription)));
   if (forms.generated) renderKeyValue(forms.generated, buildGeneratedSummary(latestData.generated));
   renderLogTimeline(forms.logs, latestData.logs?.logs || []);
   renderArchitectureSelector();
@@ -275,6 +277,32 @@ function renderSubscriptionUrls() {
 function renderSocksServices() {
   const count = formPorts.length;
   if (socksCountEl) socksCountEl.textContent = `${count} 个服务`;
+  if (!socksServicesEl) return;
+  socksServicesEl.innerHTML = '';
+
+  for (const [index, item] of formPorts.entries()) {
+    const block = document.createElement('div');
+    block.className = 'timeline-item';
+    block.innerHTML = `
+      <div class="title">SOCKS5 服务 ${index + 1}</div>
+      <div class="form-grid">
+        <label><span>tag</span><input data-port-index="${index}" data-port-field="tag" value="${escapeHtmlAttr(item.tag || '')}" /></label>
+        <label><span>监听地址</span><input data-port-index="${index}" data-port-field="listen" value="${escapeHtmlAttr(item.listen || '127.0.0.1')}" /></label>
+        <label><span>端口</span><input data-port-index="${index}" data-port-field="port" type="number" min="1" step="1" value="${escapeHtmlAttr(item.port || '')}" /></label>
+        <label><span>目标出口</span><select data-port-index="${index}" data-port-field="target">${buildOutboundOptionsHtml(item.target || 'proxy')}</select></label>
+      </div>
+      <div class="section-heading-actions">
+        <button type="button" data-suggest-port="${index}">推荐端口</button>
+        ${formPorts.length > 1 ? `<button type="button" data-remove-port="${index}">删除</button>` : ''}
+      </div>
+    `;
+    socksServicesEl.appendChild(block);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'section-heading-actions';
+  actions.innerHTML = '<button type="button" id="add-socks-service">+ 添加 SOCKS5 服务</button>';
+  socksServicesEl.appendChild(actions);
 }
 
 function buildOutboundOptionsHtml(selectedTag) {
@@ -440,7 +468,8 @@ function parseFormConfig(validateRequired = false) {
     next.app.port = Number(fields.appPort.value || 0);
     next.app.singBoxBinary = fields.appBinary.value.trim();
     next.app.logLevel = fields.appLogLevel.value;
-    next.app.autoStart = fields.appAutoStart.checked;
+    next.app.autoStart = fields.appAutoStart.value === 'true';
+    next.app.autoConfigureOnSubscription = fields.appAutoConfigureSubscription.value === 'true';
     next.dns.strategy = fields.dnsStrategy.value;
     next.dns.remotePreset = fields.dnsRemotePreset.value;
     next.dns.remoteUrl = fields.dnsRemotePreset.value === 'custom'
@@ -507,7 +536,8 @@ function fillForm(config) {
   fields.appPort.value = config.app?.port || 18080;
   fields.appBinary.value = config.app?.singBoxBinary || '';
   fields.appLogLevel.value = config.app?.logLevel || 'info';
-  fields.appAutoStart.checked = Boolean(config.app?.autoStart);
+  fields.appAutoStart.value = config.app?.autoStart ? 'true' : 'false';
+  fields.appAutoConfigureSubscription.value = config.app?.autoConfigureOnSubscription ? 'true' : 'false';
   fields.dnsStrategy.value = config.dns?.strategy || 'prefer_ipv4';
   fields.dnsRemotePreset.value = config.dns?.remotePreset || inferDnsPreset(config.dns?.remoteUrl);
   fields.dnsRemoteUrl.value = config.dns?.remoteUrl || DNS_PRESET_URLS.cloudflare;
@@ -569,6 +599,39 @@ async function assignMissingSuggestedPorts() {
   }
 
   return changed;
+}
+
+async function autoConfigureSocksServicesFromOutbounds() {
+  const outbounds = (latestData.availableOutbounds || [])
+    .filter((item) => item && item.tag && !['proxy', 'auto', 'block', 'direct'].includes(item.tag));
+  if (!outbounds.length) {
+    throw new Error('当前没有可用节点可用于配置 SOCKS5 服务');
+  }
+
+  const host = '127.0.0.1';
+  const used = new Set();
+  const appPort = Number(fields.appPort.value || latestData.config?.app?.port || 18080);
+  let nextStart = appPort + 1;
+  const generated = [];
+
+  for (const item of outbounds) {
+    const safeTag = String(item.tag).replace(/[^a-zA-Z0-9_-]/g, '-');
+    const port = await resolveNextPort(host, nextStart, [...used]);
+    used.add(port);
+    nextStart = port + 1;
+    generated.push({
+      tag: `socks-${safeTag}`,
+      listen: host,
+      port,
+      target: item.tag,
+      sniff: true
+    });
+  }
+
+  formPorts = generated;
+  renderSocksServices();
+  formTouched = true;
+  updateEditorState();
 }
 
 function createDefaultSubscriptionUrl() {
@@ -725,11 +788,10 @@ function buildSubscriptionSummary(subscription) {
   const nodes = subscription?.nodes || [];
   return {
     updatedAt: subscription?.updatedAt || '',
-    nodeCount: nodes.length + 1,
+    nodeCount: nodes.length,
     warningCount: (subscription?.warnings || []).length,
-    firstNode: 'direct',
-    warnings: (subscription?.warnings || []).join(' | '),
-    rawLength: subscription?.rawLength || 0
+    firstNode: nodes[0]?.tag || '',
+    warnings: (subscription?.warnings || []).join(' | ')
   };
 }
 
@@ -743,7 +805,13 @@ const LABEL_MAP = {
   installed: '已安装',
   binaryPath: '二进制路径',
   installedVersion: '已安装版本',
-  plannedAsset: '计划资产'
+  plannedAsset: '计划资产',
+  updatedAt: '更新时间',
+  nodeCount: '节点数量',
+  warningCount: '警告数量',
+  firstNode: '首选节点',
+  warnings: '警告信息',
+  rawLength: '原始长度'
 };
 
 function chineseLabels(obj) {
@@ -869,6 +937,20 @@ document.getElementById('save-config').onclick = () => action('保存配置', as
 
 document.getElementById('refresh-sub').onclick = () => action('更新订阅', async () => {
   await post('/api/subscription/refresh');
+  await load();
+  if (fields.appAutoConfigureSubscription.value === 'true') {
+    await autoConfigureSocksServicesFromOutbounds();
+    const parsed = parseFormConfig(true);
+    if (!parsed.ok) throw new Error(parsed.error);
+    editor.value = parsed.text;
+    await post('/api/config', parsed.value);
+    lastSavedConfigText = parsed.text;
+    formTouched = false;
+    fillForm(parsed.value);
+    renderSubscriptionUrls();
+    renderSocksServices();
+    updateEditorState();
+  }
 });
 
 document.getElementById('start').onclick = () => action('启动 sing-box', async () => {
@@ -953,6 +1035,21 @@ copySocksButton?.addEventListener('click', () => {
     () => showToast('复制失败', false)
   );
 });
+
+autoConfigureSocksButton?.addEventListener('click', () => action('一键配置 SOCKS5 服务', async () => {
+  await load();
+  await autoConfigureSocksServicesFromOutbounds();
+  const parsed = parseFormConfig(true);
+  if (!parsed.ok) throw new Error(parsed.error);
+  editor.value = parsed.text;
+  await post('/api/config', parsed.value);
+  lastSavedConfigText = parsed.text;
+  formTouched = false;
+  fillForm(parsed.value);
+  renderSubscriptionUrls();
+  renderSocksServices();
+  updateEditorState();
+}));
 document.addEventListener('input', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
@@ -1016,6 +1113,30 @@ document.addEventListener('click', (event) => {
       formTouched = true;
       updateEditorState();
     }
+  }
+
+  if (target.id === 'add-socks-service') {
+    formPorts.push(createDefaultPort());
+    renderSocksServices();
+    formTouched = true;
+    updateEditorState();
+  }
+
+  if (target.dataset.suggestPort) {
+    const index = Number(target.dataset.suggestPort);
+    const host = formPorts[index]?.listen || '127.0.0.1';
+    const used = formPorts
+      .map((item, i) => (i === index ? 0 : Number(item.port)))
+      .filter((p) => Number.isInteger(p) && p > 0);
+    const start = Number(formPorts[index]?.port || 0) > 0
+      ? Number(formPorts[index].port) + 1
+      : Number(fields.appPort.value || 18080) + 1;
+    resolveNextPort(host, start, used).then((port) => {
+      formPorts[index].port = port;
+      renderSocksServices();
+      formTouched = true;
+      updateEditorState();
+    }).catch(() => {});
   }
 
   if (target.dataset.removeSubscription) {
