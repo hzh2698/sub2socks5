@@ -7,6 +7,7 @@ const chainsSectionBodyEl = document.getElementById('chains-section-body');
 const toggleGroupsSectionButton = document.getElementById('toggle-groups-section');
 const toggleChainsSectionButton = document.getElementById('toggle-chains-section');
 const NODES_UPDATED_KEY = 'sub2socks5:nodes-updated-at';
+const CHECK_BATCH_SIZE = 5;
 const GROUP_TEST_URL_PRESETS = [
   'https://www.gstatic.com/generate_204',
   'https://www.google.com/generate_204',
@@ -19,14 +20,14 @@ let state = {
   groups: [],
   chains: [],
   availableOutbounds: [],
-  fallbackStates: {}
+  fallbackStates: {},
+  rotateStates: {}
 };
 
 let nodeDelayState = {};
+const checkingNodeTags = new Set();
 const expandedGroups = new Set();
 const expandedChains = new Set();
-const CHECK_BATCH_SIZE = 5;
-const checkingNodeTags = new Set();
 let groupsSectionCollapsed = false;
 let chainsSectionCollapsed = false;
 
@@ -37,8 +38,11 @@ async function load() {
     throw new Error(data?.error?.message || '加载节点失败');
   }
   state = {
+    ...state,
     ...data,
-    chains: Array.isArray(data.chains) ? data.chains : []
+    chains: Array.isArray(data.chains) ? data.chains : [],
+    fallbackStates: data.fallbackStates || {},
+    rotateStates: data.rotateStates || {}
   };
   render();
 }
@@ -80,7 +84,7 @@ function renderAvailableNodes() {
           <span class="node-pill-tag is-source">${escapeHtml(sourceLabel(node.source))}</span>
         </div>
       </div>
-      <button type="button" class="node-check-button ${isChecking ? 'is-loading' : ''}" data-check-node="${escapeHtmlAttr(node.tag)}" title="点击测速" ${isChecking ? 'disabled' : ''}>${escapeHtml(delayText)}</button>
+      <button type="button" class="node-check-button ${isChecking ? 'is-loading' : ''}" data-check-node="${escapeHtmlAttr(node.tag)}" title="点击测速">${escapeHtml(delayText)}</button>
     `;
     availableNodeListEl.appendChild(card);
   }
@@ -101,6 +105,13 @@ function renderGroups() {
 
 function buildGroupPanel(index, group, selectableNodes) {
   const fallbackState = state.fallbackStates?.[group.tag] || null;
+  const rotateState = state.rotateStates?.[group.tag] || null;
+  const rotateCurrent = group.strategy === 'rotate'
+    ? (rotateState?.current || group.members?.[0] || '')
+    : '';
+  const groupTitle = group.strategy === 'rotate' && rotateCurrent
+    ? `${group.tag || `节点组 ${index + 1}`} -> ${rotateCurrent}`
+    : (group.tag || `节点组 ${index + 1}`);
   const expanded = expandedGroups.has(index);
   const selectedMembers = Array.isArray(group.members) ? group.members : [];
   const summaryCards = selectedMembers.map((memberTag) => {
@@ -121,14 +132,27 @@ function buildGroupPanel(index, group, selectableNodes) {
         </div>
       </div>
     `
-    : '';
+    : (group.strategy === 'rotate'
+      ? `
+        <div class="kv-grid">
+          <div class="kv-item">
+            <div class="key">当前轮转节点</div>
+            <div class="value">${escapeHtml(rotateCurrent || '')}</div>
+          </div>
+          <div class="kv-item">
+            <div class="key">最近切换时间</div>
+            <div class="value">${escapeHtml(rotateState?.updatedAt || '')}</div>
+          </div>
+        </div>
+      `
+      : '');
 
   const item = document.createElement('div');
   item.className = 'timeline-item group-panel';
   item.innerHTML = `
     <div class="group-panel-header">
       <div>
-        <div class="title">${escapeHtml(group.tag || `节点组 ${index + 1}`)}</div>
+        <div class="title">${escapeHtml(groupTitle)}</div>
         <div class="node-pill-tags">
           <span class="node-pill-tag">${escapeHtml(group.strategy || 'urltest')}</span>
           <span class="node-pill-tag is-source">${selectedMembers.length} 个节点</span>
@@ -147,6 +171,7 @@ function buildGroupPanel(index, group, selectableNodes) {
           <select data-kind="group" data-index="${index}" data-field="strategy">
             <option value="urltest" ${group.strategy === 'urltest' ? 'selected' : ''}>urltest</option>
             <option value="fallback" ${group.strategy === 'fallback' ? 'selected' : ''}>fallback</option>
+            <option value="rotate" ${group.strategy === 'rotate' ? 'selected' : ''}>rotate</option>
           </select>
         </label>
         <label>
@@ -261,11 +286,11 @@ function buildGroupUrlPresetOptions(currentUrl) {
 }
 
 function getSelectableNodesWithoutChains() {
-	return state.availableOutbounds.filter((item) => !['proxy', 'auto', 'block', 'direct'].includes(item.tag) && item.source !== 'chain');
+  return state.availableOutbounds.filter((item) => !['proxy', 'auto', 'block', 'direct'].includes(item.tag) && item.source !== 'chain');
 }
 
 function getSelectableNodes() {
-	return state.availableOutbounds.filter((item) => !['proxy', 'auto', 'block', 'direct'].includes(item.tag));
+  return state.availableOutbounds.filter((item) => !['proxy', 'auto', 'block', 'direct'].includes(item.tag));
 }
 
 function renderNodePill(node) {
@@ -290,64 +315,43 @@ function sourceLabel(source) {
 }
 
 async function checkNode(tag) {
-  if (checkingNodeTags.has(tag)) {
-    return;
-  }
+  if (checkingNodeTags.has(tag)) return;
   checkingNodeTags.add(tag);
   nodeDelayState[tag] = { loading: true, text: '测速中...' };
   renderAvailableNodes();
   try {
-    const configResponse = await fetch('/api/config');
-    const configData = await configResponse.json();
-    if (!configResponse.ok) {
-      throw new Error(configData?.error?.message || '读取运行状态失败');
+    const runtimeWasRunning = await ensureRuntimeRunning();
+    const response = await fetch('/api/nodes/check', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tags: [tag] })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data?.error?.message || '测速失败');
     }
-    const runtimeWasRunning = Boolean(configData?.runtime?.running);
-    try {
-      if (!runtimeWasRunning) {
-        const startResponse = await fetch('/api/runtime/start', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: '{}'
-        });
-        const startData = await startResponse.json();
-        if (!startResponse.ok) {
-          throw new Error(startData?.error?.message || '启动 sing-box 失败');
+    const result = data.results?.[tag];
+    nodeDelayState[tag] = result?.ok
+      ? {
+          text: result.text,
+          checkedAt: result.checkedAt,
+          checkedTag: result.checkedTag
         }
-        await waitForRuntimeReady();
-      }
-      const response = await fetch('/api/nodes/check', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ tags: [tag] })
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error?.message || '测速失败');
-      }
-      nodeDelayState[tag] = data.results?.[tag]?.ok
-        ? {
-            text: data.results[tag].text,
-            checkedAt: data.results[tag].checkedAt,
-            checkedTag: data.results[tag].checkedTag
-          }
-        : { text: '失败', error: data.results?.[tag]?.error || '测速失败' };
-      setStatus(`节点 ${tag} 测速完成`, 'success');
-    } finally {
-      if (!runtimeWasRunning) {
-        await fetch('/api/runtime/stop', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: '{}'
-        });
-      }
+      : { text: '失败', error: result?.error || '测速失败' };
+    setStatus(`节点 ${tag} 测速完成`, 'success');
+    if (!runtimeWasRunning) {
+      await stopRuntime();
     }
   } catch (error) {
     nodeDelayState[tag] = { text: '失败', error: error.message };
     setStatus(error.message, 'error');
+    try {
+      await stopRuntimeIfNeeded();
+    } catch {}
+  } finally {
+    checkingNodeTags.delete(tag);
+    renderAvailableNodes();
   }
-  checkingNodeTags.delete(tag);
-  renderAvailableNodes();
 }
 
 async function checkAllNodes() {
@@ -357,74 +361,41 @@ async function checkAllNodes() {
     return;
   }
 
-  const configResponse = await fetch('/api/config');
-  const configData = await configResponse.json();
-  if (!configResponse.ok) {
-    throw new Error(configData?.error?.message || '读取运行状态失败');
-  }
-  const runtimeWasRunning = Boolean(configData?.runtime?.running);
-
+  const runtimeWasRunning = await ensureRuntimeRunning();
   setStatus('正在分批刷新全部节点测速...', 'loading');
   for (const tag of tags) {
     nodeDelayState[tag] = { loading: true, text: '测速中...' };
   }
   renderAvailableNodes();
 
-  let cursor = 0;
   let hasError = false;
   try {
-    if (!runtimeWasRunning) {
-      const startResponse = await fetch('/api/runtime/start', {
+    for (let index = 0; index < tags.length; index += CHECK_BATCH_SIZE) {
+      const batch = tags.slice(index, index + CHECK_BATCH_SIZE);
+      const response = await fetch('/api/nodes/check', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: '{}'
+        body: JSON.stringify({ tags: batch })
       });
-      const startData = await startResponse.json();
-      if (!startResponse.ok) {
-        throw new Error(startData?.error?.message || '启动 sing-box 失败');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error?.message || '批量测速失败');
       }
-      await waitForRuntimeReady();
+      for (const tag of batch) {
+        const result = data.results?.[tag];
+        nodeDelayState[tag] = result?.ok
+          ? { text: result.text, checkedAt: result.checkedAt, checkedTag: result.checkedTag }
+          : { text: '失败', error: result?.error || '测速失败' };
+        if (!result?.ok) hasError = true;
+      }
+      renderAvailableNodes();
     }
-
-    const runOne = async () => {
-      while (true) {
-        const current = cursor;
-        cursor += 1;
-        if (current >= tags.length) {
-          return;
-        }
-        const tag = tags[current];
-        try {
-          const response = await fetch('/api/nodes/check', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ tags: [tag] })
-          });
-          const data = await response.json();
-          if (!response.ok) {
-            throw new Error(data?.error?.message || '批量测速失败');
-          }
-          const result = data.results?.[tag];
-          nodeDelayState[tag] = result?.ok
-            ? { text: result.text, checkedAt: result.checkedAt, checkedTag: result.checkedTag }
-            : { text: '失败', error: result?.error || '测速失败' };
-        } catch (error) {
-          nodeDelayState[tag] = { text: '失败', error: error.message };
-          hasError = true;
-        }
-        renderAvailableNodes();
-      }
-    };
-
-    const workerCount = Math.min(CHECK_BATCH_SIZE, tags.length);
-    await Promise.all(Array.from({ length: workerCount }, () => runOne()));
+  } catch (error) {
+    hasError = true;
+    setStatus(error.message, 'error');
   } finally {
     if (!runtimeWasRunning) {
-      await fetch('/api/runtime/stop', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: '{}'
-      });
+      await stopRuntime();
     }
   }
 
@@ -432,8 +403,46 @@ async function checkAllNodes() {
     setStatus('部分节点测速失败，请重试', 'error');
     return;
   }
-
   setStatus('全部节点测速完成', 'success');
+}
+
+async function ensureRuntimeRunning() {
+  const configResponse = await fetch('/api/config');
+  const configData = await configResponse.json();
+  if (!configResponse.ok) {
+    throw new Error(configData?.error?.message || '读取运行状态失败');
+  }
+  const runtimeWasRunning = Boolean(configData?.runtime?.running);
+  if (!runtimeWasRunning) {
+    const startResponse = await fetch('/api/runtime/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}'
+    });
+    const startData = await startResponse.json();
+    if (!startResponse.ok) {
+      throw new Error(startData?.error?.message || '启动 sing-box 失败');
+    }
+    await waitForRuntimeReady();
+  }
+  return runtimeWasRunning;
+}
+
+async function stopRuntime() {
+  await fetch('/api/runtime/stop', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}'
+  });
+}
+
+async function stopRuntimeIfNeeded() {
+  const response = await fetch('/api/config');
+  const data = await response.json();
+  if (!response.ok) return;
+  if (data?.runtime?.running) {
+    await stopRuntime();
+  }
 }
 
 async function waitForRuntimeReady(timeoutMs = 8000) {
@@ -516,6 +525,7 @@ document.getElementById('save-nodes').addEventListener('click', async () => {
     if (duplicateChainTag) {
       throw new Error(`链式代理 tag 重复：${duplicateChainTag}`);
     }
+
     const response = await fetch('/api/nodes', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

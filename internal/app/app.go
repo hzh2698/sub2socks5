@@ -46,6 +46,12 @@ type App struct {
 	publicDir           string
 	staticFS            fs.FS
 	autoUpdateLastRun   map[string]time.Time
+	rotateGateway       *rotateGateway
+}
+
+type rotateGateway struct {
+	listeners []net.Listener
+	stopCh    chan struct{}
 }
 
 func Run() error {
@@ -86,6 +92,7 @@ func RunWithStaticFS(staticFS fs.FS) error {
 	}
 
 	go app.runSubscriptionAutoUpdateScheduler()
+	go app.runRotateGroupScheduler()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/config", app.handleConfig)
@@ -94,6 +101,7 @@ func RunWithStaticFS(staticFS fs.FS) error {
 	mux.HandleFunc("/api/nodes/import", app.handleNodeImport)
 	mux.HandleFunc("/api/nodes/check", app.handleNodesCheck)
 	mux.HandleFunc("/api/nodes/egress", app.handleNodesEgress)
+	mux.HandleFunc("/api/rotate/step", app.handleRotateStep)
 	mux.HandleFunc("/api/ports/next", app.handleNextPort)
 	mux.HandleFunc("/api/runtime/generate", app.handleRuntimeGenerate)
 	mux.HandleFunc("/api/runtime/start", app.handleRuntimeStart)
@@ -123,6 +131,323 @@ func (a *App) runSubscriptionAutoUpdateScheduler() {
 		a.runSubscriptionAutoUpdateLocked(time.Now())
 		a.mu.Unlock()
 	}
+}
+
+func (a *App) runRotateGroupScheduler() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		a.mu.Lock()
+		a.rotateGroupsLocked(time.Now())
+		a.mu.Unlock()
+	}
+}
+
+func (a *App) rotateGroupsLocked(now time.Time) {
+	groups := getSlice(getMap(a.cfg, "nodeRegistry"), "groups")
+	if len(groups) == 0 {
+		return
+	}
+	runtimeState := getMap(a.cfg, "runtimeState")
+	if runtimeState == nil {
+		runtimeState = map[string]any{}
+		a.cfg["runtimeState"] = runtimeState
+	}
+	rotateStates := getMap(runtimeState, "rotateGroups")
+	if rotateStates == nil {
+		rotateStates = map[string]any{}
+		runtimeState["rotateGroups"] = rotateStates
+	}
+
+	changed := false
+	for _, g := range groups {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(mustStr(gm["strategy"])) != "rotate" {
+			continue
+		}
+		tag := strings.TrimSpace(mustStr(gm["tag"]))
+		if tag == "" {
+			continue
+		}
+		members := normalizeGroupMembers(gm)
+		if len(members) == 0 {
+			continue
+		}
+		state := ensureRotateState(rotateStates, tag, members)
+		current := rotateStateCurrent(state, members)
+		if current == "" {
+			continue
+		}
+		if ok, _ := a.checkGroupMemberHealthy(current, tag); ok {
+			continue
+		}
+		next, rotated := advanceRotateQueue(state, members, current, func(candidate string) bool {
+			ok, _ := a.checkGroupMemberHealthy(candidate, tag)
+			return ok
+		})
+		if next == "" || next == current {
+			continue
+		}
+		if len(rotated) > 0 {
+			state["queue"] = rotated
+		}
+		state["current"] = next
+		state["index"] = rotateStateIndexOf(next, members)
+		state["updatedAt"] = now.Format(time.RFC3339)
+		state["lastSwitch"] = now.Format(time.RFC3339)
+		rotateStates[tag] = state
+		changed = true
+		a.appendRuntimeLog(fmt.Sprintf("rotate group %s switched from %s to %s", tag, current, next))
+		if a.runtimeInfo != nil && getBool(a.runtimeInfo, "running", false) {
+			_ = switchClashSelector(tag, next)
+		}
+	}
+
+	if changed {
+		_ = writeJSON(filepath.Join(a.dataDir, "app-config.json"), a.cfg)
+		_ = writeJSON(filepath.Join(a.runtimeDir, "sing-box.json"), buildSingBoxConfig(a.cfg, a.subState))
+	}
+}
+
+func (a *App) handleRotateStep(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, "POST")
+		return
+	}
+	var body map[string]any
+	_ = decodeJSON(r.Body, &body)
+	requestedTag := strings.TrimSpace(mustStr(body["groupTag"]))
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	steps := a.rotateGroupsStepLocked(time.Now(), requestedTag)
+	ok(w, map[string]any{
+		"ok":       true,
+		"groupTag": requestedTag,
+		"steps":    steps,
+		"runtime":  a.runtimeInfo,
+	})
+}
+
+func (a *App) rotateGroupsStepLocked(now time.Time, requestedTag string) []any {
+	groups := getSlice(getMap(a.cfg, "nodeRegistry"), "groups")
+	if len(groups) == 0 {
+		return []any{}
+	}
+	runtimeState := getMap(a.cfg, "runtimeState")
+	if runtimeState == nil {
+		runtimeState = map[string]any{}
+		a.cfg["runtimeState"] = runtimeState
+	}
+	rotateStates := getMap(runtimeState, "rotateGroups")
+	if rotateStates == nil {
+		rotateStates = map[string]any{}
+		runtimeState["rotateGroups"] = rotateStates
+	}
+
+	results := []any{}
+	changed := false
+	for _, g := range groups {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(mustStr(gm["strategy"])) != "rotate" {
+			continue
+		}
+		tag := strings.TrimSpace(mustStr(gm["tag"]))
+		if tag == "" {
+			continue
+		}
+		if requestedTag != "" && requestedTag != tag {
+			continue
+		}
+		members := normalizeGroupMembers(gm)
+		if len(members) == 0 {
+			continue
+		}
+		state := ensureRotateState(rotateStates, tag, members)
+		current := rotateStateCurrent(state, members)
+		if current == "" {
+			continue
+		}
+
+		next, rotated := advanceRotateQueue(state, members, current, func(candidate string) bool {
+			ok, _ := a.checkGroupMemberHealthy(candidate, tag)
+			return ok
+		})
+		if next == "" {
+			next = current
+		}
+		if next != current {
+			if len(rotated) > 0 {
+				state["queue"] = rotated
+			}
+			state["current"] = next
+			state["index"] = rotateStateIndexOf(next, members)
+			state["updatedAt"] = now.Format(time.RFC3339)
+			state["lastSwitch"] = now.Format(time.RFC3339)
+			rotateStates[tag] = state
+			changed = true
+			a.appendRuntimeLog(fmt.Sprintf("manual rotate step %s: %s -> %s", tag, current, next))
+			if a.runtimeInfo != nil && getBool(a.runtimeInfo, "running", false) {
+				_ = switchClashSelector(tag, next)
+			}
+		}
+		results = append(results, map[string]any{
+			"groupTag": tag,
+			"before":   current,
+			"after":    next,
+			"switched": next != current,
+		})
+	}
+
+	if changed {
+		_ = writeJSON(filepath.Join(a.dataDir, "app-config.json"), a.cfg)
+		_ = writeJSON(filepath.Join(a.runtimeDir, "sing-box.json"), buildSingBoxConfig(a.cfg, a.subState))
+	}
+	return results
+}
+
+func (a *App) checkGroupMemberHealthy(tag, groupTag string) (bool, error) {
+	delay, err := measureProxyDelay(tag, "https://www.gstatic.com/generate_204", 5000)
+	if err != nil {
+		return false, err
+	}
+	_ = delay
+	return true, nil
+}
+
+func switchClashSelector(groupTag, selectedTag string) error {
+	endpoint := fmt.Sprintf("http://127.0.0.1:19090/proxies/%s", url.QueryEscape(groupTag))
+	payload, _ := json.Marshal(map[string]any{"name": selectedTag})
+	req, _ := http.NewRequest(http.MethodPut, endpoint, bytes.NewReader(payload))
+	req.Header.Set("content-type", "application/json")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("selector update failed: HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func normalizeGroupMembers(group map[string]any) []string {
+	members := []string{}
+	for _, m := range getSlice(group, "members") {
+		tag := strings.TrimSpace(mustStr(m))
+		if tag != "" && !stringInSlice(tag, members) {
+			members = append(members, tag)
+		}
+	}
+	return members
+}
+
+func ensureRotateState(rotateStates map[string]any, tag string, members []string) map[string]any {
+	state := getMap(rotateStates, tag)
+	if state == nil {
+		state = map[string]any{}
+	}
+	queue := normalizeRotateQueue(state, members)
+	if len(queue) == 0 {
+		queue = append([]string{}, members...)
+	}
+	state["queue"] = queue
+	if current := strings.TrimSpace(mustStr(state["current"])); current == "" || !stringInSlice(current, queue) {
+		state["current"] = queue[0]
+	}
+	if idx, ok := state["index"].(float64); !ok || int(idx) < 0 || int(idx) >= len(queue) {
+		state["index"] = rotateStateIndexOf(mustStr(state["current"]), queue)
+	}
+	return state
+}
+
+func normalizeRotateQueue(state map[string]any, members []string) []string {
+	raw := []string{}
+	for _, item := range getSlice(state, "queue") {
+		tag := strings.TrimSpace(mustStr(item))
+		if tag != "" && stringInSlice(tag, members) && !stringInSlice(tag, raw) {
+			raw = append(raw, tag)
+		}
+	}
+	if len(raw) == 0 {
+		return append([]string{}, members...)
+	}
+	ordered := []string{}
+	for _, member := range members {
+		if stringInSlice(member, raw) {
+			ordered = append(ordered, member)
+		}
+	}
+	if len(ordered) != len(raw) {
+		return append([]string{}, members...)
+	}
+	return ordered
+}
+
+func rotateStateCurrent(state map[string]any, members []string) string {
+	queue := normalizeRotateQueue(state, members)
+	if len(queue) == 0 {
+		return ""
+	}
+	idx := 0
+	if v, ok := state["index"]; ok {
+		switch n := v.(type) {
+		case float64:
+			idx = int(n)
+		case int:
+			idx = n
+		}
+	}
+	if idx < 0 || idx >= len(queue) {
+		idx = 0
+	}
+	return queue[idx]
+}
+
+func rotateStateIndexOf(target string, members []string) int {
+	for i, member := range members {
+		if member == target {
+			return i
+		}
+	}
+	return 0
+}
+
+func advanceRotateQueue(state map[string]any, members []string, current string, healthy func(string) bool) (string, []string) {
+	queue := normalizeRotateQueue(state, members)
+	if len(queue) == 0 {
+		return "", nil
+	}
+	start := rotateStateIndexOf(current, queue)
+	rotated := append([]string{}, queue...)
+	for i := 0; i < len(queue); i++ {
+		idx := (start + i + 1) % len(queue)
+		candidate := queue[idx]
+		if healthy(candidate) {
+			for j := 0; j < idx; j++ {
+				rotated = append(rotated[1:], rotated[0])
+			}
+			return candidate, rotated
+		}
+	}
+	return current, queue
+}
+
+func stringInSlice(value string, items []string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) runSubscriptionAutoUpdateLocked(now time.Time) {
@@ -463,6 +788,7 @@ func (a *App) handleNodes(w http.ResponseWriter, r *http.Request) {
 			"chains":                   getSlice(nr, "chains"),
 			"availableOutbounds":       collectOutbounds(a.cfg, a.subState),
 			"fallbackStates":           map[string]any{},
+			"rotateStates":             getMap(getMap(a.cfg, "runtimeState"), "rotateGroups"),
 		})
 	case http.MethodPost:
 		var body map[string]any
@@ -627,12 +953,14 @@ func (a *App) startRuntimeLocked() error {
 	a.runtimeInfo["state"] = "running"
 	a.runtimeInfo["running"] = true
 	a.appendRuntimeLog("sing-box started")
+	a.startRotateGatewayLocked()
 	go a.captureLogs(stdout)
 	go a.captureLogs(stderr)
 	go func(c *exec.Cmd) {
 		waitErr := c.Wait()
 		a.mu.Lock()
 		if a.proc == c {
+			a.stopRotateGatewayLocked()
 			a.proc = nil
 			a.runtimeInfo["state"] = "stopped"
 			a.runtimeInfo["running"] = false
@@ -681,12 +1009,116 @@ func (a *App) handleRuntimeStop(w http.ResponseWriter, r *http.Request) {
 		_ = a.proc.Process.Kill()
 		a.proc = nil
 	}
+	a.stopRotateGatewayLocked()
 	a.runtimeInfo["state"] = "stopped"
 	a.runtimeInfo["running"] = false
 	a.appendRuntimeLog("runtime stop requested")
 	rt := a.runtimeInfo
 	a.mu.Unlock()
 	ok(w, rt)
+}
+
+func rotateInternalPort(publicPort int) int { return publicPort + 10000 }
+
+func (a *App) startRotateGatewayLocked() {
+	if a.rotateGateway != nil {
+		return
+	}
+	rotateTags := map[string]bool{}
+	for _, g := range getSlice(getMap(a.cfg, "nodeRegistry"), "groups") {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(mustStr(gm["strategy"])) == "rotate" {
+			tag := strings.TrimSpace(mustStr(gm["tag"]))
+			if tag != "" {
+				rotateTags[tag] = true
+			}
+		}
+	}
+	if len(rotateTags) == 0 {
+		return
+	}
+	gw := &rotateGateway{listeners: []net.Listener{}, stopCh: make(chan struct{})}
+	for _, p := range getSlice(a.cfg, "ports") {
+		pm, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		target := strings.TrimSpace(mustStr(pm["target"]))
+		if !rotateTags[target] {
+			continue
+		}
+		host := strings.TrimSpace(mustStr(pm["listen"]))
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		publicPort := int(toFloat(pm["port"]))
+		if publicPort <= 0 {
+			continue
+		}
+		internalPort := rotateInternalPort(publicPort)
+		ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, publicPort))
+		if err != nil {
+			a.appendRuntimeLog("rotate gateway listen failed: " + err.Error())
+			continue
+		}
+		gw.listeners = append(gw.listeners, ln)
+		a.appendRuntimeLog(fmt.Sprintf("rotate gateway listening on %s:%d -> 127.0.0.1:%d (%s)", host, publicPort, internalPort, target))
+		go a.serveRotateGatewayListener(gw, ln, target, internalPort)
+	}
+	if len(gw.listeners) == 0 {
+		return
+	}
+	a.rotateGateway = gw
+}
+
+func (a *App) serveRotateGatewayListener(gw *rotateGateway, ln net.Listener, groupTag string, internalPort int) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			select {
+			case <-gw.stopCh:
+				return
+			default:
+			}
+			time.Sleep(80 * time.Millisecond)
+			continue
+		}
+		go a.handleRotateGatewayConn(conn, groupTag, internalPort)
+	}
+}
+
+func (a *App) handleRotateGatewayConn(client net.Conn, groupTag string, internalPort int) {
+	defer client.Close()
+	a.mu.Lock()
+	steps := a.rotateGroupsStepLocked(time.Now(), groupTag)
+	if len(steps) == 0 {
+		_ = switchClashSelector(groupTag, groupTag)
+	}
+	a.mu.Unlock()
+	upstream, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", internalPort), 8*time.Second)
+	if err != nil {
+		a.appendRuntimeLog("rotate gateway dial upstream failed: " + err.Error())
+		return
+	}
+	defer upstream.Close()
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(upstream, client); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(client, upstream); done <- struct{}{} }()
+	<-done
+}
+
+func (a *App) stopRotateGatewayLocked() {
+	if a.rotateGateway == nil {
+		return
+	}
+	close(a.rotateGateway.stopCh)
+	for _, ln := range a.rotateGateway.listeners {
+		_ = ln.Close()
+	}
+	a.rotateGateway = nil
 }
 
 func (a *App) handleRuntimeLogs(w http.ResponseWriter, r *http.Request) {
@@ -2186,6 +2618,22 @@ func buildSingBoxConfig(cfg, sub map[string]any) map[string]any {
 				"default":                     members[0],
 				"interrupt_exist_connections": false,
 			})
+		} else if strategy == "rotate" {
+			defaultMember := members[0]
+			runtimeState := getMap(cfg, "runtimeState")
+			rotateStates := getMap(runtimeState, "rotateGroups")
+			if state := getMap(rotateStates, tag); state != nil {
+				if current := rotateStateCurrent(state, members); current != "" && stringInSlice(current, members) {
+					defaultMember = current
+				}
+			}
+			outbounds = append(outbounds, map[string]any{
+				"type":                        "selector",
+				"tag":                         tag,
+				"outbounds":                   toAnySliceString(members),
+				"default":                     defaultMember,
+				"interrupt_exist_connections": false,
+			})
 		} else {
 			url := strings.TrimSpace(mustStr(gm["url"]))
 			if url == "" {
@@ -2262,6 +2710,19 @@ func buildSingBoxConfig(cfg, sub map[string]any) map[string]any {
 
 	inbounds := []any{}
 	routeRules := []any{}
+	rotateTargets := map[string]bool{}
+	for _, g := range getSlice(nr, "groups") {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(mustStr(gm["strategy"])) == "rotate" {
+			tag := strings.TrimSpace(mustStr(gm["tag"]))
+			if tag != "" {
+				rotateTargets[tag] = true
+			}
+		}
+	}
 	for _, p := range getSlice(cfg, "ports") {
 		pm, ok := p.(map[string]any)
 		if !ok {
@@ -2271,14 +2732,19 @@ func buildSingBoxConfig(cfg, sub map[string]any) map[string]any {
 		if inboundTag == "" {
 			continue
 		}
+		listen := mustStr(pm["listen"])
+		listenPort := int(toFloat(pm["port"]))
+		target := strings.TrimSpace(mustStr(pm["target"]))
+		if rotateTargets[target] {
+			listen = "127.0.0.1"
+			listenPort = rotateInternalPort(listenPort)
+		}
 		inbounds = append(inbounds, map[string]any{
 			"type":        "socks",
 			"tag":         inboundTag,
-			"listen":      mustStr(pm["listen"]),
-			"listen_port": int(toFloat(pm["port"])),
+			"listen":      listen,
+			"listen_port": listenPort,
 		})
-
-		target := strings.TrimSpace(mustStr(pm["target"]))
 		if target == "" {
 			target = "proxy"
 		}
@@ -2415,7 +2881,7 @@ func defaultConfig() map[string]any {
 		"dns":          map[string]any{"strategy": "prefer_ipv4", "remotePreset": "cloudflare", "remoteUrl": "https://cloudflare-dns.com/dns-query", "bootstrapServer": "1.1.1.1"},
 		"routing":      map[string]any{"routeFinal": "proxy", "autoDetectInterface": true, "ruleSetUrls": []any{}, "rules": []any{map[string]any{"action": "sniff"}}},
 		"nodeRegistry": map[string]any{"manualNodes": []any{}, "groups": []any{}, "chains": []any{}, "disabledSubscriptionTags": []any{}},
-		"runtimeState": map[string]any{"fallbackGroups": map[string]any{}},
+		"runtimeState": map[string]any{"fallbackGroups": map[string]any{}, "rotateGroups": map[string]any{}},
 		"ports":        []any{map[string]any{"tag": "default-socks", "listen": "127.0.0.1", "port": 18081, "target": "proxy", "sniff": true}},
 	}
 }

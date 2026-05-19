@@ -765,6 +765,15 @@ async function autoConfigureSocksServicesFromOutbounds() {
     ? latestData.config.nodeRegistry.groups.slice()
     : [];
   const generatedGroups = [];
+  const rotateGroupTag = 'ALL-PASSED-ROTATE';
+  generatedGroups.push({
+    tag: rotateGroupTag,
+    strategy: 'rotate',
+    url: 'https://www.gstatic.com/generate_204',
+    interval: '10m',
+    timeoutMs: 5000,
+    members: passedOutbounds.map((item) => item.tag)
+  });
   const groupedNodeTags = new Set();
   for (const [ip, members] of ipBuckets.entries()) {
     if (members.length < 2) continue;
@@ -792,14 +801,27 @@ async function autoConfigureSocksServicesFromOutbounds() {
   const generated = [];
 
   const targetsForServices = [
+    { tag: rotateGroupTag, isGroup: true },
     ...generatedGroups.map((group) => ({ tag: group.tag, isGroup: true })),
     ...passedOutbounds.filter((item) => !groupedNodeTags.has(item.tag)).map((item) => ({ tag: item.tag, isGroup: false }))
   ];
+  const dedupTargets = [];
+  const seenTargetTags = new Set();
+  for (const target of targetsForServices) {
+    if (seenTargetTags.has(target.tag)) continue;
+    seenTargetTags.add(target.tag);
+    dedupTargets.push(target);
+  }
 
-  for (const item of targetsForServices) {
+  for (const [idx, item] of dedupTargets.entries()) {
     ensureSocksConfigNotCancelled();
     const safeTag = String(item.tag).replace(/[^a-zA-Z0-9_.-]/g, '-');
-    const port = await resolveNextPort(host, nextStart, [...used]);
+    let port;
+    if (idx === 0) {
+      port = await resolveNextPort(host, 18081, [...used]);
+    } else {
+      port = await resolveNextPort(host, nextStart, [...used]);
+    }
     used.add(port);
     nextStart = port + 1;
     generated.push({
@@ -812,6 +834,7 @@ async function autoConfigureSocksServicesFromOutbounds() {
   }
 
   formPorts = generated;
+  latestData.config.ports = generated.map((item) => ({ ...item }));
   if (currentView === 'json') {
     const parsed = parseJsonEditor();
     if (parsed.ok) {
@@ -821,10 +844,13 @@ async function autoConfigureSocksServicesFromOutbounds() {
       editor.value = JSON.stringify(next, null, 2);
     }
   }
+  latestData.config.nodeRegistry.groups = mergedGroups;
+  editor.value = JSON.stringify(latestData.config, null, 2);
+  fillForm(latestData.config);
   renderSocksServices();
   formTouched = true;
   updateEditorState();
-  updateSocksConfigOverlay('完成', targetsForServices.length, outbounds.length, `已生成 ${targetsForServices.length} 个 SOCKS5 服务，自动创建 ${generatedGroups.length} 个同出口节点组`);
+  updateSocksConfigOverlay('完成', dedupTargets.length, outbounds.length, `已生成 ${dedupTargets.length} 个 SOCKS5 服务，自动创建 ${generatedGroups.length} 个节点组`);
   await sleep(350);
   hideSocksConfigOverlay();
   socksConfigAbortController = null;
@@ -1669,13 +1695,20 @@ autoConfigureSocksButton?.addEventListener('click', () => action('一键配置 S
   try {
     await load();
     await autoConfigureSocksServicesFromOutbounds();
+    const configToSave = structuredClone(latestData.config || {});
     const parsed = parseFormConfig(true);
     if (!parsed.ok) throw new Error(parsed.error);
-    editor.value = parsed.text;
-    await post('/api/config', parsed.value);
-    lastSavedConfigText = parsed.text;
+    configToSave.subscription = parsed.value.subscription;
+    configToSave.app = parsed.value.app;
+    configToSave.dns = parsed.value.dns;
+    configToSave.routing = parsed.value.routing;
+    configToSave.ports = parsed.value.ports;
+    editor.value = JSON.stringify(configToSave, null, 2);
+    await post('/api/config', configToSave);
+    lastSavedConfigText = editor.value;
     formTouched = false;
-    fillForm(parsed.value);
+    latestData.config = configToSave;
+    fillForm(configToSave);
     renderSubscriptionUrls();
     renderSocksServices();
     updateEditorState();
